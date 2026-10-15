@@ -109,13 +109,20 @@ find_unused_apps() {
 # ----------------------------------------------------------------------------
 # Concrete advice depending on what is quarantined.
 # ----------------------------------------------------------------------------
+# quarantine_list <cause> <type>: space-separated names of the quarantine
+# entries with that cause and type ("" matches any), no trailing space.
+quarantine_list() {
+    awk -F'\t' -v c="$1" -v t="$2" '(c == "" || $4 == c) && (t == "" || $2 == t) {
+        s = s (s == "" ? "" : " ") $1 } END { printf "%s", s }' "${QUARANTINE_FILE}"
+}
+
 remediation_hints() {
     [[ -s "${QUARANTINE_FILE}" ]] || return 0
     local xcode_pkgs pkg_casks build_pkgs port_pkgs
-    xcode_pkgs=$(awk -F'\t' '$4 == "xcode" {printf "%s ", $1}' "${QUARANTINE_FILE}")
-    pkg_casks=$(awk -F'\t' '$4 == "pkg" {printf "%s ", $1}' "${QUARANTINE_FILE}")
-    build_pkgs=$(awk -F'\t' '$4 == "build" && $2 == "formula" {printf "%s ", $1}' "${QUARANTINE_FILE}")
-    port_pkgs=$(awk -F'\t' '$2 == "port" {printf "%s ", $1}' "${QUARANTINE_FILE}")
+    xcode_pkgs=$(quarantine_list xcode "")
+    pkg_casks=$(quarantine_list pkg "")
+    build_pkgs=$(quarantine_list build formula)
+    port_pkgs=$(quarantine_list "" port)
     [[ -n "${xcode_pkgs}${pkg_casks}${build_pkgs}${port_pkgs}" ]] || return 0
 
     info "To unblock:"
@@ -134,7 +141,7 @@ remediation_hints() {
             say "      Long-term fix: ${C_DIM}praetorian --migrate <formula>${C_RESET} (precompiled MacPorts package)."
     fi
     if [[ -n "${port_pkgs}" ]]; then
-        say "    ${C_DIM}-${C_RESET} ${port_pkgs}(MacPorts): ${C_DIM}port log <name>${C_RESET} or the *_portlogs.tar.gz archive;"
+        say "    ${C_DIM}-${C_RESET} ${port_pkgs} (MacPorts): ${C_DIM}port log <name>${C_RESET} or the *_portlogs.tar.gz archive;"
         say "      ${C_DIM}sudo port clean <name>${C_RESET} then try again. The old version stays active and usable."
         say "      Persistent bug: MacPorts still supports this Mac, report it at https://trac.macports.org"
     fi
