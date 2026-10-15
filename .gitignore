@@ -1,0 +1,6 @@
+# praetorian local state (machine-specific, may contain paths)
+logs/
+quarantine.tsv
+.toolchain
+.lock/
+migrated.tsv
