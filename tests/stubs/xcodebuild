@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# Fake xcodebuild for the tests: records every call in $XCODEBUILD_CALLS,
+# never downloads anything.
+#
+#   XCODEBUILD_LICENSE_RC       xcodebuild -license check
+#   XCODEBUILD_FIRSTLAUNCH_RC   xcodebuild -checkFirstLaunchStatus
+#   XCODEBUILD_DOWNLOAD_RC      xcodebuild -downloadComponent <name>
+#
+set -u
+printf '%s\n' "$*" >>"${XCODEBUILD_CALLS:-/dev/null}"
+case "${1:-}" in
+    -license) exit "${XCODEBUILD_LICENSE_RC:-0}" ;;
+    -checkFirstLaunchStatus) exit "${XCODEBUILD_FIRSTLAUNCH_RC:-0}" ;;
+    -downloadComponent)
+        echo "Downloading ${2:-} (fake)"
+        exit "${XCODEBUILD_DOWNLOAD_RC:-0}"
+        ;;
+esac
+exit 0

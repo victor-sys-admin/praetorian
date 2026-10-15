@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#
+# macOS-style mktemp: "mktemp -t prefix" doesn't exist on Linux
+# (BusyBox/GNU require an XXXXXX template).
+#
+stubs=$(cd "$(dirname "$0")" && pwd)
+PATH=${PATH//"${stubs}:"/}
+if [[ "${1:-}" == -t && "$(uname -s)" != Darwin ]]; then
+    exec mktemp -p "${TMPDIR:-/tmp}" "$2.XXXXXX"
+fi
+exec mktemp "$@"

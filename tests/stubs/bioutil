@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# Fake bioutil for the praetorian-sudo-setup tests: "bioutil -c" reports
+# $BIOUTIL_TEMPLATES enrolled fingerprints (default 1).
+#
+if [[ "${1:-}" == -c ]]; then
+    printf 'User 501:\t%s biometric template(s)\n' "${BIOUTIL_TEMPLATES:-1}"
+    echo "Operation performed successfully."
+fi
+exit 0
