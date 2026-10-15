@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Fake port (MacPorts) for the tests: records every call in $PORT_CALLS
+# and answers according to environment variables set by the test.
+# Installed by the test as $PRAETORIAN_PORT_PREFIX/bin/port.
+#
+#   PORT_VERSION_OUTPUT / PORT_VERSION_RC   port version
+#   PORT_SELFUPDATE_OUTPUT / PORT_SELFUPDATE_RC   port selfupdate
+#   PORT_OUTDATED          outdated ports (space-separated)
+#   PORT_OUTDATED_AFTER    ports still outdated after "port upgrade"
+#   PORT_UPGRADE_OUTPUT / PORT_UPGRADE_RC   port upgrade
+#   PORT_INSTALL_OUTPUT / PORT_INSTALL_RC   port install
+#   PORT_ACTIVE            ports already installed and active (port
+#                          installed <name>), before any "port install"
+#   PORT_AVAILABLE         known ports (port echo all, port info)
+#   PORT_CONTENTS          installed files (port contents)
+#   PORT_INACTIVE          inactive versions (port installed inactive),
+#                          gone after "port uninstall inactive"
+#   PORT_LEAVES            unrequested, unused ports (port echo leaves)
+#
+set -u
+printf '%s\n' "$*" >>"${PORT_CALLS:?}"
+state="${PORT_CALLS}.state"
+
+# Global options (-N, -p, -q…) ignored.
+while [[ "${1:-}" == -* ]]; do shift; done
+
+case "${1:-}" in
+    version)
+        echo "${PORT_VERSION_OUTPUT:-Version: 2.12.0}"
+        exit "${PORT_VERSION_RC:-0}"
+        ;;
+    selfupdate)
+        echo "--->  Updating the ports tree"
+        [[ -z "${PORT_SELFUPDATE_OUTPUT:-}" ]] || echo "${PORT_SELFUPDATE_OUTPUT}"
+        exit "${PORT_SELFUPDATE_RC:-0}"
+        ;;
+    outdated)
+        list=${PORT_OUTDATED:-}
+        [[ -e "${state}.upgraded" ]] && list=${PORT_OUTDATED_AFTER:-}
+        if [[ -z "${list}" ]]; then
+            echo "No installed ports are outdated."
+        else
+            echo "The following installed ports are outdated:"
+            for p in ${list}; do printf '%-30s 1.0_0 < 1.1_0\n' "${p}"; done
+        fi
+        ;;
+    upgrade)
+        touch "${state}.upgraded"
+        [[ -z "${PORT_UPGRADE_OUTPUT:-}" ]] || echo "${PORT_UPGRADE_OUTPUT}"
+        exit "${PORT_UPGRADE_RC:-0}"
+        ;;
+    uninstall)
+        [[ "${2:-}" != inactive ]] || touch "${state}.inactive_removed"
+        ;;
+    install)
+        rc=${PORT_INSTALL_RC:-0}
+        [[ -z "${PORT_INSTALL_OUTPUT:-}" ]] || echo "${PORT_INSTALL_OUTPUT}"
+        [[ "${rc}" -ne 0 ]] || touch "${state}.installed.$2"
+        exit "${rc}"
+        ;;
+    installed)
+        if [[ "${2:-}" == inactive ]]; then
+            if [[ -n "${PORT_INACTIVE:-}" && ! -e "${state}.inactive_removed" ]]; then
+                echo "The following ports are currently installed:"
+                for p in ${PORT_INACTIVE}; do echo "  ${p} @1.0_0"; done
+            else
+                echo "None of the specified ports are installed."
+            fi
+        elif [[ -e "${state}.installed.${2:-}" || " ${PORT_ACTIVE:-} " == *" ${2:-} "* ]]; then
+            echo "The following ports are currently installed:"
+            echo "  $2 @1.1_0 (active)"
+        else
+            echo "None of the specified ports are installed."
+        fi
+        ;;
+    contents)
+        echo "Port $2 contains:"
+        for f in ${PORT_CONTENTS:-}; do echo "  ${f}"; done
+        ;;
+    info)
+        name=${!#}
+        if [[ " ${PORT_AVAILABLE:-} " == *" ${name} "* ]]; then
+            echo "${name}"
+        else
+            echo "Error: Port ${name} not found"
+            exit 1
+        fi
+        ;;
+    echo)
+        if [[ "${2:-}" == all ]]; then
+            for p in ${PORT_AVAILABLE:-}; do echo "${p}"; done
+        elif [[ "${2:-}" == leaves ]]; then
+            for p in ${PORT_LEAVES:-}; do printf '%-30s @1.0_0\n' "${p}"; done
+        fi
+        ;;
+esac
+exit 0

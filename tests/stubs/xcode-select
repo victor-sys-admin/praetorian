@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# Fake xcode-select for the tests: "xcode-select -p" answers
+# $XCODE_SELECT_PATH, otherwise what a machine like this one would answer
+# with Xcode (if installed) selected and ready. The tests then don't depend
+# on how Xcode is set up on the machine running them.
+#
+set -u
+if [[ "${1:-}" == -p ]]; then
+    if [[ -n "${XCODE_SELECT_PATH:-}" ]]; then
+        echo "${XCODE_SELECT_PATH}"
+    elif [[ -d /Applications/Xcode.app ]]; then
+        echo /Applications/Xcode.app/Contents/Developer
+    else
+        echo /Library/Developer/CommandLineTools
+    fi
+fi
+exit 0

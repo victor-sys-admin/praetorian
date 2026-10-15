@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#
+# Fake osascript: records the arguments, one per line, in
+# $OSASCRIPT_CALLS (no notification pops up during the tests on macOS).
+#
+printf '%s\n' "$@" >>"${OSASCRIPT_CALLS:-/dev/null}"
+exit 0

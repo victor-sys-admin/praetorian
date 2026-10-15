@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# Fake sudo for the tests: records the call in $SUDO_CALLS, then runs
+# the command. SUDO_DENY=1 simulates an impossible authentication
+# (unattended, Touch ID cancelled).
+#
+set -u
+printf '%s\n' "$*" >>"${SUDO_CALLS:-/dev/null}"
+[[ "${1:-}" == -n ]] && shift
+if [[ -n "${SUDO_DENY:-}" ]]; then
+    echo "sudo: a password is required" >&2
+    exit 1
+fi
+exec "$@"

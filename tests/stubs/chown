@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#
+# Fake chown for the praetorian-sudo-setup tests (not root: chown root
+# would fail): records the call in $CHOWN_CALLS.
+#
+printf '%s\n' "$*" >>"${CHOWN_CALLS:-/dev/null}"
+exit 0

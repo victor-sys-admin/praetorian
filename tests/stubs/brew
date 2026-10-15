@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# Fake brew for the tests: records every call in $BREW_CALLS and answers
+# according to environment variables set by the test.
+#
+#   BREW_OUTDATED_FORMULA / BREW_OUTDATED_CASK   packages "to upgrade"
+#   BREW_OUTDATED_FORMULA_AFTER   outdated formulae once an upgrade was
+#                         attempted (default: BREW_OUTDATED_FORMULA)
+#   BREW_UPGRADE_OUTPUT   / BREW_UPGRADE_RC      brew upgrade --formula
+#   BREW_UPGRADE_OUTPUT2  / BREW_UPGRADE_RC2     2nd brew upgrade --formula
+#                         (retry after an auto-fix; default: same as 1st)
+#   BREW_CASK_OUTPUT      / BREW_CASK_RC         brew upgrade --cask
+#   BREW_FETCH_RC         brew fetch
+#   BREW_REINSTALL_RC     brew reinstall
+#   BREW_LIST_FILES       files of "brew list --formula <f>" (empty:
+#                         formula not installed, code 1)
+#   BREW_USES             formulae depending on <f> (brew uses --installed)
+#   BREW_LEAVES           brew leaves
+#   BREW_PREFIX           brew --prefix
+#   BREW_PREFIX_RC        exit code of brew --prefix (simulates a broken brew)
+#   BREW_REPOSITORY       brew --repository
+#   BREW_CASKROOM         brew --caskroom
+#   BREW_DOCTOR_OUTPUT    / BREW_DOCTOR_RC       brew doctor
+#   BREW_BUILD_LOG        non-empty: brew upgrade --formula <f> writes a
+#                         build log in ~/Library/Logs/Homebrew/<f>/
+#   BREW_HANG_ON          subcommand ($1, e.g. update) that never ends:
+#                         the stub writes "<its PID> <its child's PID>" to
+#                         $BREW_CALLS.hang, then waits on a long sleep
+#   BREW_STDIN_FILE       brew update writes there "tty" or "notty" (is
+#                         stdin a terminal?) then "line=<line read from
+#                         stdin>"; $BREW_STDIN_FILE.ready is created just
+#                         before the read
+#
+set -u
+printf '%s\n' "$*" >>"${BREW_CALLS:?}"
+state="${BREW_CALLS}.state"
+
+say() { [[ -z "$1" ]] || printf '%s\n' "$1"; }
+
+if [[ -n "${BREW_HANG_ON:-}" && "${1:-}" == "${BREW_HANG_ON}" ]]; then
+    sleep 300 &
+    printf '%s %s\n' "$$" "$!" >"${BREW_CALLS}.hang"
+    wait
+    exit 0
+fi
+
+case "$1 ${2:-}" in
+    "outdated --formula")
+        if [[ -e "${state}.upgraded" ]]; then
+            say "${BREW_OUTDATED_FORMULA_AFTER-${BREW_OUTDATED_FORMULA:-}}"
+        else
+            say "${BREW_OUTDATED_FORMULA:-}"
+        fi
+        ;;
+    "outdated --cask") say "${BREW_OUTDATED_CASK:-}" ;;
+    "upgrade --formula")
+        if [[ -e "${state}.upgraded" ]]; then
+            say "${BREW_UPGRADE_OUTPUT2-${BREW_UPGRADE_OUTPUT:-}}"
+            rc=${BREW_UPGRADE_RC2:-${BREW_UPGRADE_RC:-0}}
+        else
+            say "${BREW_UPGRADE_OUTPUT:-}"
+            rc=${BREW_UPGRADE_RC:-0}
+        fi
+        touch "${state}.upgraded"
+        if [[ -n "${BREW_BUILD_LOG:-}" ]]; then
+            mkdir -p "${HOME}/Library/Logs/Homebrew/${!#}"
+            echo "make: fake build log" >"${HOME}/Library/Logs/Homebrew/${!#}/01.make.log"
+        fi
+        exit "${rc}"
+        ;;
+    "upgrade --cask")
+        say "${BREW_CASK_OUTPUT:-}"
+        exit "${BREW_CASK_RC:-0}"
+        ;;
+    "update "*)
+        if [[ -n "${BREW_STDIN_FILE:-}" ]]; then
+            if [[ -t 0 ]]; then echo tty; else echo notty; fi >"${BREW_STDIN_FILE}"
+            touch "${BREW_STDIN_FILE}.ready"
+            line=""
+            read -r -t 20 line || true
+            echo "line=${line}" >>"${BREW_STDIN_FILE}"
+        fi
+        ;;
+    "doctor "*)
+        say "${BREW_DOCTOR_OUTPUT:-}"
+        exit "${BREW_DOCTOR_RC:-0}"
+        ;;
+    "fetch "*) exit "${BREW_FETCH_RC:-0}" ;;
+    "reinstall "*) exit "${BREW_REINSTALL_RC:-0}" ;;
+    "list --formula")
+        [[ -n "${BREW_LIST_FILES:-}" ]] || exit 1
+        say "${BREW_LIST_FILES}"
+        ;;
+    "uses --installed") say "${BREW_USES:-}" ;;
+    "leaves "*) say "${BREW_LEAVES:-}" ;;
+    "--prefix "*)
+        echo "${BREW_PREFIX:-/nonexistent/brew}"
+        exit "${BREW_PREFIX_RC:-0}"
+        ;;
+    "--repository "*) echo "${BREW_REPOSITORY:-/nonexistent/brew}" ;;
+    "--caskroom "*) echo "${BREW_CASKROOM:-/nonexistent/Caskroom}" ;;
+esac
+exit 0
