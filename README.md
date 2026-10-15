@@ -6,14 +6,19 @@ One command runs `brew update`, upgrades formulae and casks, removes orphans, cl
 
 It also moves command-line tools from Homebrew to MacPorts, one formula at a time, with checks before and after (see [Package strategy](#package-strategy-homebrew--macports)).
 
-It was built for, and hardened on, an **Intel MacBook Pro (2018) running macOS 15**. On that machine Homebrew no longer ships precompiled packages (bottles), so every upgrade compiles from source. Most of the design below comes from the failures that setup produced.
+It runs on any Mac with macOS's own `/bin/bash` 3.2 and Homebrew and/or MacPorts. It was first built for, and hardened on, an Intel Mac, where Homebrew no longer ships precompiled packages (bottles) and every upgrade compiles from source: most of the design below comes from the failures that setup produced (see [History](#project-history-the-2026-10-15-incident)).
 
-> Code, comments and terminal output are in English since version 1.2.0.
+## Latest release
+
+### 1.3.0 (2026-10-15)
+
+Session lock hardened, way back for half-installed casks, stricter root checks before MacPorts runs under sudo, `--dry-run` no longer removes old logs, `praetorian-sudo-setup` keeps `pam_reattach` working, and the state directory can be set with `PRAETORIAN_HOME`. Full list and earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
 ## Contents
 
+- [Latest release](#latest-release)
 - [Quick start](#quick-start)
 - [Installation](#installation)
 - [Requirements](#requirements)
@@ -27,14 +32,17 @@ It was built for, and hardened on, an **Intel MacBook Pro (2018) running macOS 1
 - [Design decisions](#design-decisions)
 - [Security: how sudo is handled](#security-how-sudo-is-handled)
 - [Development](#development)
-- [History: the 2026-10-15 incident](#history-the-2026-10-15-incident)
+- [Project history: the 2026-10-15 incident](#project-history-the-2026-10-15-incident)
 - [Known limitations and ideas](#known-limitations-and-ideas)
 - [References](#references)
+- [Changelog](CHANGELOG.md), [Security policy](SECURITY.md), [Contributing](CONTRIBUTING.md)
 - [License](#license)
 
 ---
 
 ## Quick start
+
+The examples assume the repository is cloned in `~/praetorian` (the default); adjust the path if you put it elsewhere.
 
 ```sh
 # One-time, optional but recommended: use Touch ID for sudo prompts
@@ -55,18 +63,19 @@ sudo ~/praetorian/praetorian-sudo-setup
 ~/praetorian/praetorian --migrate wget
 ```
 
-The script expects to live in `~/praetorian/` (see `PRAETORIAN_HOME`).
+praetorian keeps its state (logs, quarantine, lock) in `PRAETORIAN_HOME`, `~/praetorian` by default.
 
 ## Installation
 
-1. **Put the repository in `~/praetorian`.** The script stores its logs, quarantine and lock next to itself there (`PRAETORIAN_HOME` is fixed to `~/praetorian`):
+1. **Clone the repository.** Anywhere works; `~/praetorian` is the simplest, because it is also the default state directory, so code and state stay together (the state files are in `.gitignore`):
    ```sh
-   git clone <repository-url> ~/praetorian
-   chmod +x ~/praetorian/praetorian ~/praetorian/praetorian-sudo-setup
+   git clone https://github.com/victor-sys-admin/praetorian.git ~/praetorian
    ```
+   Cloned elsewhere, praetorian still writes its state to `~/praetorian` unless you set `PRAETORIAN_HOME` (an absolute path) in the environment that starts it, for example `export PRAETORIAN_HOME="$HOME/src/praetorian"` in `~/.zprofile` (and in the `EnvironmentVariables` of a `launchd` job).
+
    `lib/` must stay next to `praetorian`: the script loads its code from there. A symbolic link to `praetorian` (for example `~/.local/bin/praetorian`) works, because the real location is resolved. The files in `lib/` must belong to you and not be writable by group or others, or praetorian refuses to start (see [Code layout](#code-layout)).
 2. **Make sure Xcode is ready** (see [Compiler toolchain](#compiler-toolchain)). praetorian refuses to start while Xcode is installed but not initialized.
-3. **Optional: Touch ID for sudo**: `sudo ~/praetorian/praetorian-sudo-setup`.
+3. **Optional: Touch ID for sudo**: `sudo ~/praetorian/praetorian-sudo-setup` (see [Security](#security-how-sudo-is-handled)).
 4. **Optional, recommended on Intel: MacPorts.**
    1. Download the package for **your** macOS version (`sw_vers -productVersion`) from <https://www.macports.org/install.php> and install it.
    2. Open a **new** terminal and check that `command -v port` prints `/opt/local/bin/port`. If it prints nothing, see [`port: command not found`](#port-command-not-found-after-installing-macports).
@@ -105,7 +114,7 @@ MacPorts also needs Xcode or at least the Command Line Tools, even though it mos
 |---|---|
 | `bash` | Runs the script. macOS's own `/bin/bash` 3.2 is enough: the code avoids associative arrays, `mapfile` and negative array indices. A newer bash from Homebrew or MacPorts works too |
 | `awk`, `sed`, `grep`, `cut`, `tr`, `sort`, `comm`, `wc`, `head`, `tail`, `cmp`, `xargs` | Parsing brew and port output, the quarantine file and shell startup files |
-| `find`, `ls`, `cat`, `mkdir`, `rm`, `mv`, `basename`, `dirname`, `readlink`, `mktemp` | Logs, temp files, lock, Caskroom repair, spotting commands installed twice, finding `lib/` through symbolic links |
+| `find`, `ls`, `cat`, `cp`, `mkdir`, `rm`, `mv`, `basename`, `dirname`, `readlink`, `mktemp` | Logs, temp files, lock, Caskroom repair and backup, spotting commands installed twice, finding `lib/` through symbolic links, ownership checks of `port` |
 | `id` | Owner check of the `lib/` files before they're loaded |
 | `tar` | Archiving Homebrew and MacPorts build logs before cleanup |
 | `df` | Free disk space check |
@@ -122,7 +131,7 @@ The disk needs at least 5 GB free (20 GB recommended); below that, praetorian st
 
 ### Optional: Touch ID for sudo
 
-`praetorian-sudo-setup` (run once with sudo) uses `bioutil` to check that a fingerprint is enrolled, and `cp`, `sed`, `chmod` and `chown` to write `/etc/pam.d/sudo_local`. It needs a Mac with Touch ID; without one, sudo simply asks for the password.
+`praetorian-sudo-setup` (run once with sudo) uses `bioutil` to check that a fingerprint is enrolled, and `cp`, `sed`, `awk`, `chmod` and `chown` to write `/etc/pam.d/sudo_local`. It needs a Mac with Touch ID; without one, sudo simply asks for the password.
 
 ### For development only: checks and tests
 
@@ -130,19 +139,19 @@ The disk needs at least 5 GB free (20 GB recommended); below that, praetorian st
 
 | Container | Check |
 |---|---|
-| ShellCheck 0.11.0 | Lint (blocking) |
-| shfmt 3.14.1 | Formatting (blocking; `ci/check fix-format` fixes it). Scripts, tests and fakes |
-| Gitleaks 8.30.1 | Secrets (blocking) |
+| ShellCheck 0.11.0 | Lint, `--severity=style` (blocking). ShellCheck and shfmt check every file matched by `praetorian`, `praetorian-sudo-setup`, `lib/*.sh`, `ci/*`, `tests/*.bats` and `tests/stubs/*` |
+| shfmt 3.14.1 | Formatting (blocking; `ci/check fix-format` fixes it) |
+| Gitleaks 8.30.1 | Secrets (blocking). Scans the working tree, archives included (`--max-archive-depth 2`): with the default `PRAETORIAN_HOME`, that covers your local `logs/` and their `.tar.gz` build logs. A `PRAETORIAN_HOME` outside the repository isn't scanned |
 | actionlint 1.7.12, zizmor 1.31.0 | GitHub workflows (blocking) |
 | bats 1.14.0 | Tests, with the fakes from `tests/stubs/` (blocking) |
 
-The same tests also run **on macOS under `/bin/bash` 3.2** with `ci/macos-tests`: it fetches bats-core 1.14.0 by commit into a temp directory (needs `git`, nothing is installed), puts `/bin` first in the `PATH` and uses the macOS tools. GitHub Actions runs `ci/check` (Linux) and `ci/macos-tests` (`macos-latest`) on every push.
+The same tests also run **on macOS under `/bin/bash` 3.2** with `ci/macos-tests`: it fetches bats-core 1.14.0 by commit into a temp directory (needs `git`, nothing is installed), puts `/bin` first in the `PATH`, unsets the `PRAETORIAN_*` variables of your shell, and uses the macOS tools. GitHub Actions runs `ci/check` (Linux) and `ci/macos-tests` (`macos-latest`) on every push.
 
 ## Options
 
 | Option | Effect |
 |---|---|
-| `--dry-run` | Shows the planned steps. Changes no package and no praetorian state (`quarantine.tsv`, `.toolchain`, `migrated.tsv`): quarantine entries a real run would lift are only counted. It still writes its own session log and takes the session lock. Skips `caffeinate` and the Xcode check. |
+| `--dry-run` | Shows the planned steps. Changes no package and no praetorian state (`quarantine.tsv`, `.toolchain`, `migrated.tsv`, old logs): quarantine entries a real run would lift and old logs it would remove are only counted. It still writes its own session log and takes the session lock (so it can't run alongside a real session). Skips `caffeinate` and the Xcode check; a disk below the minimum free space only gives a warning. |
 | `--no-greedy` | Upgrades casks without `--greedy`, so apps that update themselves are left alone. |
 | `--retry-quarantined` | Ignores the quarantine for this run and retries everything. |
 | `--unattended` | Never waits for input. Whatever needs sudo (casks with an installer, the whole MacPorts part) is deferred, not failed, and a macOS notification summarizes the run. This mode turns on automatically when stdin is not a terminal. |
@@ -151,15 +160,15 @@ The same tests also run **on macOS under `/bin/bash` 3.2** with `ci/macos-tests`
 | `--migrate <formula>[=<port>]`<br>`--migrate=<formula>[=<port>]` | Moves **one** formula to MacPorts: checks, installs the port, checks again, and only then uninstalls the formula. Example: `--migrate python@3.12=python312`. Without `=<port>`, the port has the formula's name (without its tap: `hashicorp/tap/terraform` → `terraform`). Combine with `--dry-run` to run only the checks. Names are restricted to letters, digits and `@._+-` (plus `/` for a tap formula), because they end up in commands run under sudo. |
 | `--help`, `-h` | Usage. |
 
-**Exit codes:** `0` = success, `1` = prerequisite problem (no package manager, run as root, Xcode not ready, disk almost full, another session running) or migration report blocked, `2` = at least one step failed or was blocked, `130` = interrupted.
+**Exit codes:** `0` = success, `1` = prerequisite problem (no package manager, run as root, Xcode not ready, disk almost full, another session running, invalid `PRAETORIAN_HOME`, untrusted `lib/`) or migration report blocked, `2` = at least one step failed or was blocked, `130` = interrupted.
 
 ## Package strategy: Homebrew → MacPorts
 
-Homebrew dropped Intel Macs (tier 3, no bottles): every formula compiles from source, some never build. MacPorts still ships precompiled packages for this Mac's macOS version. The target state:
+Homebrew dropped Intel Macs (tier 3, no bottles): every formula compiles from source, some never build. MacPorts still ships precompiled packages for Intel Macs, for each supported macOS version. On such a Mac, the target state is:
 
 | What | Where | Why |
 |---|---|---|
-| Command-line tools and libraries | **MacPorts** | Precompiled for this Mac; supports old macOS versions for years |
+| Command-line tools and libraries | **MacPorts** | Precompiled for Intel; supports old macOS versions for years |
 | Apps (casks) | **Homebrew** | MacPorts doesn't manage apps. A cask downloads the vendor's app and compiles nothing, so tier 3 doesn't affect it |
 | Anything with no MacPorts port | Homebrew, until a replacement is found | |
 
@@ -190,13 +199,13 @@ During the transition both run side by side (`/opt/local` and `/usr/local` don't
 | 3 | `homebrew.mxcl.<formula>.plist` | it runs as a Homebrew service |
 | 4 | `~/.zshrc`, `~/.zprofile`, `~/.bash_profile`… | a line uses `<prefix>/opt/<formula>` or `Cellar/<formula>/` (it would point to nothing). Commented lines are ignored |
 | 5 | `port info --name <port>` | the port doesn't exist |
-| 6 | `sudo port -N install <port>` | the install fails or sudo is refused |
+| 6 | `sudo port -N install <port>` | sudo is impossible (unattended), `port` can't be trusted with root (see [Security](#security-how-sudo-is-handled)), the install fails or sudo is refused. Skipped when the port is already active |
 | 7 | `port installed` + `port contents` | the port isn't active, or doesn't provide **every** command the formula had in `bin/` and `sbin/` |
 | 8 | `brew uninstall --formula` | (only now) |
 
 A successful migration is recorded in `migrated.tsv`. The order is deliberate: at every point before step 8, the Homebrew version is untouched and still works. If step 7 fails, both are installed, which is harmless.
 
-3. Start with the formulae that hurt the most (long builds, quarantined), check your tools after each migration, and stop when only casks are left: Homebrew then has nothing to compile. Small, standalone tools (`wget`, `jq`, `tree`…) make good first migrations; formulae referenced in your shell files (here `mysql-client`, `openjdk`, `libpcap`) come later, once those lines are updated.
+3. Start with the formulae that hurt the most (long builds, quarantined), check your tools after each migration, and stop when only casks are left: Homebrew then has nothing to compile. Small, standalone tools (`wget`, `jq`, `tree`…) make good first migrations; formulae referenced in your shell files come later, once those lines are updated.
 
 ### Undoing a migration
 
@@ -208,20 +217,20 @@ sudo port uninstall <port>         # optional: remove the MacPorts version
 hash -r                            # forget the old command locations in this shell
 ```
 
-Then delete the formula's line from `~/praetorian/migrated.tsv` (it's only a record; nothing reads it back).
+Then delete the formula's line from `migrated.tsv` in `PRAETORIAN_HOME` (it's only a record; nothing reads it back).
 
 praetorian never installs MacPorts itself (it's a system package): download it for your macOS version from <https://www.macports.org/install.php>.
 
 ### How MacPorts is maintained
 
-- **Absolute path everywhere**, sudo included: `/opt/local/bin/port`, never a `port` found in the `PATH`.
+- **Absolute path everywhere**, sudo included: `/opt/local/bin/port`, never a `port` found in the `PATH`. Before any `sudo port`, `port` and every directory above it must belong to root and be writable by root only (see [Security](#security-how-sudo-is-handled)).
 - **Read-only commands without sudo** (`version`, `outdated`, `installed`, `contents`, `echo`, `info`). Commands that change something run under sudo, **one sudo call per step and only when there's work**: `selfupdate`, then `upgrade` if something is outdated, then `uninstall inactive` if old versions are left. With CIS `timestamp_timeout=0`, that's at most three Touch ID prompts.
 - **One `port -p upgrade <list>`** rather than one call per port: `-p` keeps going after a failed port, so one broken port doesn't block the others, without a sudo prompt per port.
 - **The result is checked, not trusted**: a second `port outdated` runs after the upgrade. Whatever is still outdated failed, whatever the exit code said, and is quarantined (type `port`) with the failing phase (`build`, `configure`…) or the failing dependency. The `main.log` files MacPorts points to are archived in `logs/praetorian_<timestamp>_portlogs.tar.gz`.
 - **No upgrade after a failed `selfupdate`**: the ports tree might be half-synced.
 - **Unused dependencies are reported, not removed** (`port echo leaves`): they may be needed again to build something.
-- **Unattended**: MacPorts needs root for every change and no password is stored, so the whole MacPorts part is deferred, with the number of outdated ports from the local index. A narrow `NOPASSWD` sudoers rule would allow overnight runs, but [was rejected](#security-how-sudo-is-handled) for the same reason as for casks.
-- **macOS upgraded without reinstalling MacPorts**: MacPorts reports `Current platform "darwin 25" does not match expected platform "darwin 24"`. praetorian blocks every MacPorts command and prints the [official migration steps](https://trac.macports.org/wiki/Migration). This will happen if this Mac moves to macOS 26.
+- **Unattended**: MacPorts needs root for every change and no password is stored, so the whole MacPorts part is deferred, with the number of outdated ports from the local index. Only read-only commands run before that (`port version`, `port outdated`, and `sudo -n true` to see whether sudo would need authentication). A narrow `NOPASSWD` sudoers rule would allow overnight runs, but [was rejected](#security-how-sudo-is-handled) for the same reason as for casks.
+- **macOS upgraded without reinstalling MacPorts**: MacPorts reports `Current platform "darwin 25" does not match expected platform "darwin 24"`. praetorian blocks every MacPorts command and prints the [official migration steps](https://trac.macports.org/wiki/Migration). This happens after every major macOS upgrade until MacPorts is reinstalled.
 
 ## When praetorian blocks
 
@@ -234,19 +243,21 @@ praetorian never stops silently. Every block prints the same five parts, even wi
     What to do :
         Check the network, then run praetorian again.
         Details: sudo /opt/local/bin/port -d selfupdate
-    Log        : ~/praetorian/logs/praetorian_<timestamp>.log
+    Log        : <PRAETORIAN_HOME>/logs/praetorian_<timestamp>.log
 ```
 
 *Impact* always says what was **not** done, so you know the state you're in. A block in one part (say MacPorts) doesn't stop the other parts; a block on a prerequisite stops the session before anything runs.
 
 | Block | Scope | Fail-safe reason |
 |---|---|---|
-| Run as root | whole session (exit 1) | Homebrew refuses root; praetorian requests sudo itself |
+| Run as root | whole session (exit 1), checked first, before `lib/` is loaded | Homebrew refuses root; praetorian requests sudo itself |
 | No Homebrew and no MacPorts | whole session (exit 1) | nothing to maintain |
 | Xcode installed but not ready | whole session (exit 1) | builds fail or hang forever |
 | Less than 5 GB free | whole session (exit 1) | a full disk mid-install leaves half-installed packages |
-| Another praetorian session running | whole session (exit 1) | two brew/port runs on the same packages corrupt them. A lock left by a crashed session (dead PID) is taken over with a warning |
+| Another praetorian session running | whole session (exit 1) | two brew/port runs on the same packages corrupt them. See [the session lock](#the-session-lock) for how a lock left by a crashed session is taken over |
+| `PRAETORIAN_HOME` not an absolute path, or containing a newline | whole session (exit 1), before anything is written | a relative path would follow the current directory |
 | MacPorts not responding / installed for another macOS | MacPorts part | ports may be broken until reinstalled |
+| `port` (or a directory above it) not owned by root or writable by others | MacPorts part, `--migrate` | it would run as root |
 | `port selfupdate` failed | MacPorts upgrade | half-synced ports tree |
 | Each `--migrate` check | that migration | the Homebrew formula stays in place |
 | `lib/` file missing, a symbolic link, owned by someone else, or writable by group/others | whole session (exit 1), before anything runs | that code runs with your rights and starts commands under sudo |
@@ -266,39 +277,41 @@ The MacPorts installer adds `export PATH="/opt/local/bin:/opt/local/sbin:$PATH"`
    grep -n 'PATH=' ~/.zprofile ~/.zshrc
    zsh -lic 'echo $PATH' | tr ':' '\n' | head -3   # what a new terminal gets
    ```
-   Fix it by adding `/opt/local/bin:/opt/local/sbin:` at the start of that line (this is what happened on 2026-10-15, see [history](#macports-install-same-day)), or better, by making it extend `$PATH` instead of replacing it.
+   Fix it by adding `/opt/local/bin:/opt/local/sbin:` at the start of that line (this is what happened during the [project history](#macports-install-same-day)), or better, by making it extend `$PATH` instead of replacing it.
 3. **Only `sudo port` fails.** If `port` works but `sudo port` doesn't, sudo is using its own `secure_path`. Use the full path: `sudo /opt/local/bin/port …`. praetorian always does.
 
 praetorian itself doesn't depend on your `PATH` for MacPorts (it calls `/opt/local/bin/port`), but it warns when `/opt/local/bin` is missing from it, because the commands you install would be invisible in the terminal.
 
 ### "MacPorts deferred" every night
 
-Expected when running unattended: MacPorts needs root for every change and praetorian stores no password. Run `~/praetorian/praetorian` from a terminal now and then; the overnight run still handles Homebrew.
+Expected when running unattended: MacPorts needs root for every change and praetorian stores no password. Run `praetorian` from a terminal now and then; the overnight run still handles Homebrew.
 
 ### A package keeps being skipped
 
-It's quarantined. `cat ~/praetorian/quarantine.tsv` shows why and since when. The summary prints how to unblock each cause; `--retry-quarantined` retries everything once, and deleting a line retries that package for good.
+It's quarantined. `cat "${PRAETORIAN_HOME:-$HOME/praetorian}/quarantine.tsv"` shows why and since when. The summary prints how to unblock each cause; `--retry-quarantined` retries everything once, and deleting a line retries that package for good.
 
 ### "another praetorian session is already running"
 
-Check the PID it gives (`ps -p <pid> -o command=`). If it isn't praetorian (a PID reused after a crash), `rm -rf ~/praetorian/.lock`.
+Check the PID it gives (`ps -p <pid> -o command=`). If it isn't praetorian (a PID reused after a crash), remove `.lock` in `PRAETORIAN_HOME` (`rm -rf ~/praetorian/.lock` with the default).
+
+"couldn't take the session lock" means another session started at the same moment (or a lock with no PID yet is less than a minute old): wait a moment and run again.
 
 ### "praetorian's code in lib/ can't be trusted"
 
-praetorian found a `lib/` file it won't load, and names it with the reason. First check that nobody changed the code (`git -C ~/praetorian status` and `git diff`). Then:
+praetorian found a `lib/` file it won't load, and names it with the reason. The block prints the exact commands for your clone; below, `<repo>` is where you cloned praetorian. First check that nobody changed the code (`git -C <repo> status` and `git -C <repo> diff`). Then:
 
-- **writable by group or others**: often a copy made with a permissive umask, or an editor that changed the mode. `chmod go-w ~/praetorian/lib ~/praetorian/lib/*.sh`.
-- **missing**: `git -C ~/praetorian checkout -- lib/`.
+- **writable by group or others**: often a copy made with a permissive umask, or an editor that changed the mode. `chmod go-w <repo>/lib <repo>/lib/*.sh`.
+- **missing**: `git -C <repo> checkout -- lib/`.
 - **a symbolic link**: replace it with the real file from the repository.
-- **another owner**: after checking the content, `chown $(id -un) ~/praetorian/lib ~/praetorian/lib/*.sh`.
+- **another owner**: after checking the content, `chown $(id -un) <repo>/lib <repo>/lib/*.sh`.
 
 ### Touch ID doesn't show up for sudo
 
-Touch ID doesn't reach sudo inside `tmux`, `screen` or over SSH: sudo asks for the password instead. Run praetorian from a plain terminal window.
+Over SSH there is no Touch ID: sudo asks for the password. Inside `tmux` (or `screen`), `pam_tid` can't reach the Touch ID sensor on its own either. The fix is [`pam_reattach`](https://github.com/fabianishere/pam_reattach): install it, then put `auth optional /path/to/pam_reattach.so` **before** the `pam_tid.so` line in `/etc/pam.d/sudo_local`. `praetorian-sudo-setup` respects that order: when a `pam_reattach.so` line is already there, it inserts `pam_tid` right after it. Otherwise, run praetorian from a plain terminal window.
 
 ### Where is the full output?
 
-`~/praetorian/logs/praetorian_<timestamp>.log`, written live: `tail -f` it during a long build. Build logs of failed packages are in the `_buildlogs.tar.gz` (Homebrew) and `_portlogs.tar.gz` (MacPorts) archives next to it.
+`logs/praetorian_<timestamp>.log` in `PRAETORIAN_HOME` (`~/praetorian/logs/` by default), written live: `tail -f` it during a long build. Build logs of failed packages are in the `_buildlogs.tar.gz` (Homebrew) and `_portlogs.tar.gz` (MacPorts) archives next to it.
 
 ## What a session does
 
@@ -320,33 +333,44 @@ Maintenance Homebrew (skipped if Homebrew is absent)
    8. brew cleanup --prune=all
    │
    ▼
-Maintenance MacPorts (skipped if MacPorts is absent; deferred when unattended)
+Maintenance MacPorts (skipped if MacPorts is absent)
    1. port version   (health, macOS mismatch)
+      unattended and sudo -n true fails → port outdated (count only), whole part deferred
+      port and every directory above it owned by root, writable by root only? otherwise blocked
    2. sudo port selfupdate
    3. port outdated (minus quarantine) → sudo port -p upgrade <list> → port outdated again
    4. sudo port uninstall inactive   (only if any)
    5. report port echo leaves
    │
    ▼
-Side by side (both present) ─► Diagnostics (brew doctor) ─► Unused apps (> 6 months) ─► Log rotation ─► Summary (+ notification)
+Side by side (both present) ─► Diagnostics (brew doctor) ─► Unused apps (> 6 months) ─► Log rotation (counted only in dry-run) ─► Summary (+ notification)
 ```
 
 The summary lists failed steps, blocks, the Homebrew and MacPorts errors pulled from the output, anything newly quarantined, deferred items, and concrete commands to unblock each quarantined package.
 
 ## Files and state
 
+The code lives where you cloned it. The state lives in `PRAETORIAN_HOME` (`~/praetorian` by default, so the same directory when you cloned there; the state files are in `.gitignore`).
+
 | Path | Content | Tracked in git |
 |---|---|---|
 | `praetorian` | Entry point: constants, options, code loading, `main` | yes |
 | `lib/*.sh` | The code, by topic (see [Code layout](#code-layout)) | yes |
 | `praetorian-sudo-setup` | One-time Touch ID setup for sudo | yes |
+| `ci/`, `tests/`, `.github/` | Checks, tests and CI (see [Development](#development)) | yes |
+| *In `PRAETORIAN_HOME`:* | | |
 | `logs/praetorian_<timestamp>.log` | Full session log, including the complete brew output (last 30 kept). `logs/` is made private (`700`): it lists your paths and packages | no |
 | `logs/praetorian_<timestamp>_buildlogs.tar.gz` | Homebrew build logs produced during the session (last 30 kept) | no |
 | `logs/praetorian_<timestamp>_portlogs.tar.gz` | MacPorts `main.log` files of failed ports (last 30 kept) | no |
 | `quarantine.tsv` | Packages skipped on purpose, one per line | no |
 | `migrated.tsv` | Formulae moved to MacPorts: `formula  port  epoch` | no |
-| `.toolchain` | `xcode` or `clt`: the compiler toolchain seen on the previous run | no |
-| `.lock/` | Present while a session runs (holds its PID) | no |
+| `.toolchain` | `xcode` or `clt`: the compiler toolchain seen by the last real (not dry-run) session; written on every one | no |
+| `.lock/` | Present while a session runs; `.lock/pid` holds its PID (written as `.lock/pid.<pid>` then renamed) | no |
+| `.lock.stale.<pid>` | A crashed session's lock, for the moment it is being taken over | no |
+| `.cask_backup.<cask>.<pid>` | Copy of `Caskroom/<cask>` while a half-installed cask is reinstalled; removed afterwards, kept only if it couldn't be put back (the warning gives the command) | no |
+| *Elsewhere:* | | |
+| `$TMPDIR/praetorian.*`, `praetorian_stamp.*`, `praetorian_q.*` | Current step's output, session start stamp, quarantine rewrite. Removed at the end of the session | — |
+| `/etc/pam.d/sudo_local` | Written by `praetorian-sudo-setup` only (`root:wheel 444`), with `sudo_local.bak.<timestamp>.<pid>` backups next to it | — |
 
 `quarantine.tsv` is tab-separated:
 
@@ -354,24 +378,35 @@ The summary lists failed steps, blocks, the Homebrew and MacPorts errors pulled 
 name    type(formula|cask|port)    epoch    cause(xcode|pkg|build)    detail
 ```
 
-You can edit or empty it by hand at any time.
+You can edit or empty it by hand at any time (not while a session runs).
+
+### The session lock
+
+One session at a time: `.lock/` is created with `mkdir` (atomic), and its PID is written to a temporary file then renamed, so a reader never sees half a PID. When `.lock/` already exists:
+
+- its PID is alive → blocked ("another praetorian session is already running");
+- no PID yet and the directory is less than a minute old → a session is just starting: blocked ("couldn't take the session lock");
+- otherwise (dead PID, or no PID for more than a minute) → taken over with a warning. The old lock is first renamed to `.lock.stale.<pid>` (atomic: of two sessions taking it over at once, only one succeeds) and checked again before it's removed.
+
+On exit, praetorian removes `.lock/` only if it still holds its own PID. `--dry-run` takes the lock too; `--migration-report` and `--help` don't.
 
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
+| `PRAETORIAN_HOME` | State directory: logs, quarantine, lock, `.toolchain`, `migrated.tsv` (default `~/praetorian`). Must be an absolute path without a newline, otherwise praetorian stops with exit code 1 before writing anything. Set it in the environment that starts praetorian (shell profile, `launchd` job). |
 | `HOMEBREW_DEVELOPER` | When set, praetorian leaves Homebrew on its development branch instead of switching back to stable ([decision 13](#13-stay-on-homebrews-stable-channel)). |
 | `CONTAINER_ENGINE` | `ci/check` only: `docker` or `podman`, when both are installed. |
-| `PRAETORIAN_PORT_PREFIX` | **Tests only.** MacPorts prefix (default `/opt/local`), so the tests can install a fake `port`. It can't be abused to run something as root: before the system's `sudo` (`/usr/bin/sudo`) runs `port`, praetorian checks that the binary, its directory and the prefix belong to root and are writable by root only, and blocks otherwise. |
-| `PRAETORIAN_SUDO_LOCAL` | **Tests only.** File written by `praetorian-sudo-setup` instead of `/etc/pam.d/sudo_local`. Harmless: that script runs as root anyway. |
-| `PRAETORIAN_MIN_FREE_GB` | **Tests only.** Minimum free space in GB (default 5), to test the disk-full block. |
+| `PRAETORIAN_PORT_PREFIX` | **Tests only.** MacPorts prefix (default `/opt/local`), so the tests can install a fake `port`. With the default prefix, `port` and every directory above it up to `/` must belong to root and be writable by root only before any `sudo port`, whatever `sudo` comes first in the `PATH`. With another prefix, that check is skipped only when the `sudo` found in the `PATH` isn't a setuid-root file (the tests' fake `sudo`, which can't give root); with a real `sudo`, it applies and blocks. |
+| `PRAETORIAN_SUDO_LOCAL` | **Tests only.** File written by `praetorian-sudo-setup` instead of `/etc/pam.d/sudo_local`. Since that script runs as root, the variable is refused (exit 1) under a real sudo (`SUDO_USER` set, so `sudo -E` can't pass it), for a relative path, a path with `..`, a symbolic link, and anything under `/etc`, `/private/etc`, `/System` or `/usr`. |
+| `PRAETORIAN_MIN_FREE_GB` | **Tests only.** Minimum free space in GB (default 5), to test the disk-full block. Digits only, read as decimal; anything else gives a warning and the default 5. |
 | `PRAETORIAN_CAFFEINATED` | Internal: set when praetorian re-runs itself under `caffeinate`, so it doesn't loop. |
 
 ---
 
 ## Design decisions
 
-Each choice below came from a real failure. The date and details are in the [history](#history-the-2026-10-15-incident).
+Each choice below came from a real failure. The date and details are in the [project history](#project-history-the-2026-10-15-incident).
 
 ### 1. Clean terminal, complete log
 
@@ -407,7 +442,9 @@ When an upgrade fails on a known cause, praetorian applies the fix and retries *
 | The formula itself asks for `brew unlink <X>` | unlink X, build, **always** relink, even on Ctrl-C | `mysql-client` refuses to build while Homebrew's `boost` is linked |
 | `Library not loaded … Referenced from …/Cellar/<Y>/` (in the output or this session's build logs) | `brew reinstall <Y>` | `merve` was still linked against `libsimdutf.34` after `simdutf` moved to `.37`, which broke the `node` build |
 | `uninitialized constant …Timeout` / `DownloadError` / `Failed to download resource` | `brew fetch --deps --force <formula>` | Homebrew bug that turned a failed download into a crash at the end of a 50-minute `node` build |
-| Cask: `It seems the … source … is not there` / `there is already a …` | `brew uninstall --cask --force` then `brew install --cask` | `font-ubuntu` left half-installed by an interrupted upgrade |
+| Cask: `It seems the … source … is not there` / `there is already a …` | `Caskroom/<cask>` copied to `PRAETORIAN_HOME/.cask_backup.<cask>.<pid>`, then `brew uninstall --cask --force` and `brew install --cask`. If the install fails (or is interrupted), the copy is put back so brew still knows the cask. No copy possible, no forced uninstall | `font-ubuntu` left half-installed by an interrupted upgrade |
+
+Limit of the cask fix: the copy only covers brew's record (`Caskroom/<cask>`). What the forced uninstall removed outside it (the `.app` in `/Applications`, fonts…) doesn't come back; the record put back lets the next session retry.
 
 Also: if brew returns an error but the new version **is** installed (no longer listed by `brew outdated`), the step counts as a success with a warning. *Real case:* `node` finished building, then Homebrew crashed on `Failed to fix install linkage` because of a sandbox permission bug.
 
@@ -489,7 +526,7 @@ For each `.app` directly inside `/Applications`, praetorian reads Spotlight's `k
 
 ### 18. Log rotation
 
-The 30 most recent session logs, the 30 most recent Homebrew build-log archives and the 30 most recent MacPorts log archives are kept, each counted separately.
+The 30 most recent session logs, the 30 most recent Homebrew build-log archives and the 30 most recent MacPorts log archives are kept, each counted separately. `--dry-run` only counts the files a real run would remove.
 
 ### 19. Code split by topic, checked before it's loaded
 
@@ -501,6 +538,8 @@ The code moved from one 2,000-line file to `lib/` (see [Code layout](#code-layou
 
 Planned exits go through `finish`. Any other non-zero exit (a command that failed where `set -e` stops the script) is caught by the `EXIT` trap and turned into a block naming the function, the file and the command, for example `in migrate (migrate.sh), command: prefix=$(brew --prefix)`. Cleanup (temp files, lock, relinking) runs either way.
 
+The same rule explains how the code is written: a function whose failure must stop the session is never called on the left of `||`, `&&` or in an `if`, because bash turns `set -e` off inside it there. `--migrate` is split into one function per step (`migrate_preconditions`, `migrate_check_formula`, `migrate_check_usage`, `migrate_check_port`, `migrate_check_sudo`, `migrate_install`, `migrate_verify`, `migrate_uninstall_formula`): each returns 0 and reports a stop through `block`, and `migrate` stops as soon as a block was added.
+
 *Why:* until 1.2.0, an `ERR` trap was meant to do this, but bash doesn't run it inside functions (where almost all the code is) unless `errtrace` is on. An unexpected failure ended the session silently. Turning `errtrace` on wasn't an option: it would also fire inside command substitutions that are allowed to fail.
 
 ---
@@ -511,10 +550,10 @@ Some casks run `.pkg` installers through `sudo`, and MacPorts needs `sudo` for e
 
 ### What the rules say
 
-| Rule | Requirement | On this Mac |
+| Rule | Requirement | How praetorian fits |
 |---|---|---|
-| CIS: *Ensure the Sudo Timeout Period Is Set to Zero* | `Defaults timestamp_timeout=0`: sudo never caches credentials | Already applied (`/etc/sudoers.d/10_cissudoconfiguration`) |
-| CIS: *Ensure a Separate Timestamp Is Enabled for Each User/tty Combo* | `timestamp_type=tty`, so a background process can't reuse a terminal's elevation | Default since sudo 1.8 / macOS 10.12; sudo here is 1.9.13 |
+| CIS: *Ensure the Sudo Timeout Period Is Set to Zero* | `Defaults timestamp_timeout=0`: sudo never caches credentials | Works with it (one prompt per sudo call); doesn't need it. Set it yourself in `/etc/sudoers.d/` if your policy requires it |
+| CIS: *Ensure a Separate Timestamp Is Enabled for Each User/tty Combo* | `timestamp_type=tty`, so a background process can't reuse a terminal's elevation | macOS default (sudo 1.8 and later); praetorian runs no background sudo |
 | PCI DSS 8.6.2 | No passwords for interactive accounts hard-coded in scripts or configuration files | No password stored anywhere |
 
 ### What praetorian does
@@ -524,17 +563,19 @@ Some casks run `.pkg` installers through `sudo`, and MacPorts needs `sudo` for e
    *Alternative rejected: a passwordless sudoers rule.* No secret is stored, but the allowed commands would have to be broad (`installer -pkg <anything>` alone already means running arbitrary code as root), so any process running as the user could become root.
 2. **No sudo keepalive.** An earlier version ran `sudo -v` once, then refreshed it in a background loop for the whole session. It was removed: with `timestamp_timeout=0` it had no effect, and keeping elevated credentials alive from a background process is exactly what the CIS controls are meant to prevent.
 3. **Touch ID instead of typing the password.** `praetorian-sudo-setup` adds `auth sufficient pam_tid.so` to `/etc/pam.d/sudo_local`, the file Apple provides (since Sonoma) to survive system updates; `/etc/pam.d/sudo` itself is overwritten by updates. No secret is stored, you must be physically present, and it works alongside `timestamp_timeout=0`: each sudo call is one touch. The password stays available as a fallback.
-   - Idempotent. It backs up an existing file (`sudo_local.bak.<timestamp>.<pid>`), uncomments the line if it was copied from Apple's template, sets `root:wheel 444` on the file, and refuses to run if no fingerprint is enrolled. The fingerprint check (`bioutil -c`) runs as the user who called sudo: `bioutil` reads the *current* user's configuration, which under sudo would be root's.
-   - Undo with `sudo ./praetorian-sudo-setup --disable`.
-   - Touch ID doesn't reach sudo inside `tmux` or over SSH; the password prompt shows up instead.
-4. **Unattended mode never blocks.** praetorian exports `SUDO_ASKPASS=/usr/bin/false`. Homebrew then calls `sudo -A` (see `system_command.rb`), which fails right away with `a password is required`. praetorian spots that message and marks the cask as **deferred**: not a failure and not quarantined. It's named in the summary and in the macOS notification, so you can run it from a terminal later. For MacPorts, praetorian checks `sudo -n true` first; when that fails, the whole MacPorts part is deferred before any command runs, and its commands use `sudo -n` so they could never wait anyway.
-5. **sudo only runs absolute paths it chose, and checks them.** MacPorts is always `/opt/local/bin/port`, never a `port` found in the `PATH`, and the names given to `--migrate` are restricted to safe characters before they reach a sudo command line. Before the system's sudo runs `port`, the binary, `/opt/local/bin` and `/opt/local` must belong to root and be writable by root only. `sudo` itself is found through the `PATH` (`/usr/bin/sudo` on a normal setup): whoever controls your `PATH` controls your shell anyway.
+   - Usage: `sudo ./praetorian-sudo-setup [--disable | --help]`. Exit code `0` when done or nothing to do, `1` on error (not root, no fingerprint enrolled, refused `PRAETORIAN_SUDO_LOCAL`, unknown option).
+   - Idempotent: when an active `pam_tid` line is already there, nothing changes. Otherwise it backs up an existing file (`sudo_local.bak.<timestamp>.<pid>`), then either uncomments the line if the file is a copy of Apple's template (`sudo_local.template`), or inserts `auth sufficient pam_tid.so` right after an existing `pam_reattach.so` line (which must come first for Touch ID inside `tmux`), or at the top of the file. A missing file is created. Every write goes through a temporary file and `mv`, and the file ends up `root:wheel 444`, like Apple's template.
+   - It refuses to run if no fingerprint is enrolled. The fingerprint check (`bioutil -c`) runs as the user who called sudo: `bioutil` reads the *current* user's configuration, which under sudo would be root's.
+   - Undo with `sudo ./praetorian-sudo-setup --disable` (comments the line out, with a backup).
+   - Touch ID doesn't reach sudo over SSH; inside `tmux`, it needs `pam_reattach` (see [Troubleshooting](#touch-id-doesnt-show-up-for-sudo)).
+4. **Unattended mode never blocks.** praetorian exports `SUDO_ASKPASS=/usr/bin/false`. Homebrew then calls `sudo -A` (see `system_command.rb`), which fails right away with `a password is required`. praetorian spots that message and marks the cask as **deferred**: not a failure and not quarantined. It's named in the summary and in the macOS notification, so you can run it from a terminal later. For MacPorts, praetorian checks `sudo -n true` first; when that fails, the whole MacPorts part is deferred before any command that changes something runs: only the read-only `port version` and `port outdated` (to count outdated ports for the summary) run before the deferral is reported. MacPorts commands use `sudo -n` when unattended, so they could never wait anyway.
+5. **sudo only runs absolute paths it chose, and checks them.** MacPorts is always `/opt/local/bin/port`, never a `port` found in the `PATH`, and the names given to `--migrate` are restricted to safe characters before they reach a sudo command line. Before any `sudo port`, `port` and every directory above it up to `/` (symbolic links followed) must belong to root and be writable by root only; otherwise the MacPorts part (or the migration) is blocked. With the default prefix `/opt/local` this check always applies, whatever `sudo` is found in the `PATH`. With a test prefix (`PRAETORIAN_PORT_PREFIX`) it is skipped only when the `sudo` found isn't a setuid-root file, which can't give root. `sudo` itself is found through the `PATH` (`/usr/bin/sudo` on a normal setup): whoever controls your `PATH` controls your shell anyway.
+6. **praetorian's own code is checked before it runs** (see [decision 19](#19-code-split-by-topic-checked-before-its-loaded)), but it remains code you own and can change: anyone who can write to your clone, or run commands as you, can make it do anything sudo then allows. That is the same trust you give any script in your home directory. See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerability.
 
 ### What was tested
 
-- `praetorian-sudo-setup`, by the bats tests on a test file (`PRAETORIAN_SUDO_LOCAL`) with fake `id`, `bioutil` and `chown`: not root, no fingerprint, missing file, Apple's commented template, other content kept, re-run (no change, no backup), `--disable` then re-enable. It hasn't yet been run for real on `/etc/pam.d/sudo_local`, because that needs root.
-- Deferral, with a fake `brew` calling the real `sudo -A`: the cask was deferred in about 2 seconds, with nothing quarantined and no failure counted. A genuine `.pkg` failure with no sudo problem was still quarantined.
-- A real `--unattended --retry-quarantined` session: about 38 seconds, 0 failures. No cask needed sudo that day, so deferral has only been checked with the fake `brew`.
+- `praetorian-sudo-setup`, by the bats tests (`tests/sudo-setup.bats`) on a test file (`PRAETORIAN_SUDO_LOCAL`) with fake `id`, `bioutil` and `chown`: not root, no fingerprint, missing file, Apple's commented template, insertion after `pam_reattach`, other content kept, re-run (no change, no backup), `--disable` then re-enable, `--help`, refused `PRAETORIAN_SUDO_LOCAL` values. The tests never touch `/etc/pam.d/sudo_local`.
+- On the development Mac: deferral with a fake `brew` calling the real `sudo -A` (the cask was deferred in about 2 seconds, nothing quarantined, no failure counted; a genuine `.pkg` failure was still quarantined), and a real `--unattended --retry-quarantined` session (about 38 seconds, 0 failures; no cask needed sudo that day).
 
 ---
 
@@ -550,12 +591,12 @@ Some casks run `.pkg` installers through `sudo`, and MacPorts needs `sudo` for e
 | `lib/quarantine.sh` | `quarantine.tsv`: add, prune, list, show |
 | `lib/brew.sh` | Homebrew maintenance, auto-fixes, casks, build log archives |
 | `lib/macports.sh` | MacPorts maintenance, result check, MacPorts log archives, commands installed twice |
-| `lib/migrate.sh` | `--migration-report`, `--migrate`, port name guesses |
+| `lib/migrate.sh` | `--migration-report`, port name guesses; `--migrate`, one function per step (`migrate_preconditions` → `migrate_check_formula` → `migrate_check_usage` → `migrate_check_port`, then `migrate_dry_run_plan` in dry-run, or `migrate_check_sudo` → `migrate_install` → `migrate_verify` → `migrate_uninstall_formula`) |
 | `lib/report.sh` | `brew doctor`, unused apps, unblocking hints, summary, notification |
 | `ci/check` | Lint, format, secrets, workflows and tests (Linux containers) |
 | `ci/macos-tests` | The same tests on macOS under `/bin/bash` 3.2 |
 
-The files are loaded in that order, at the top level of `praetorian` (not inside a function: `declare` in a function would make the globals local). They only define functions and globals; nothing runs until `main`. To add a file: create it with `# shellcheck shell=bash` as its first line, add it to `PRAETORIAN_LIBS` **and** to the `source` lines (same order), and to `SCRIPTS` in `ci/check`.
+The files are loaded in that order, at the top level of `praetorian` (not inside a function: `declare` in a function would make the globals local). They only define functions and globals; nothing runs until `main`. To add a file: create it with `# shellcheck shell=bash` as its first line, and add it to `PRAETORIAN_LIBS` **and** to the `source` lines (same order). `ci/check` finds it on its own (`lib/*.sh`).
 
 ### Checks
 
@@ -567,17 +608,18 @@ ci/check lint tests      # ShellCheck + bats only
 ci/check fix-format      # apply shfmt's formatting, when the Formatting check fails
 ```
 
-The bats tests (`tests/praetorian.bats`) run praetorian for real on Linux (`ci/check`) and macOS (`ci/macos-tests`), with fakes in `tests/stubs/` in front of the `PATH`:
+The bats tests (`tests/*.bats`, one file per area: main scenarios, options, interactive mode under a pseudo-terminal, robustness, MacPorts and `--migrate`, `praetorian-sudo-setup`) run praetorian for real on Linux (`ci/check`) and macOS (`ci/macos-tests`), with fakes in `tests/stubs/` in front of the `PATH`. Every `tests/*.bats` file is picked up by both runners. Each test gets its own temporary `HOME`, so `~/praetorian` there is a scratch directory:
 
 | Fake | Records calls in | Driven by |
 |---|---|---|
-| `brew` | `$BREW_CALLS` | `BREW_OUTDATED_*` (and `_FORMULA_AFTER`), `BREW_UPGRADE_*` (and `*2` for the retry), `BREW_CASK_*`, `BREW_FETCH_RC`, `BREW_REINSTALL_RC`, `BREW_LIST_FILES`, `BREW_USES`, `BREW_LEAVES`, `BREW_PREFIX[_RC]`, `BREW_REPOSITORY`, `BREW_CASKROOM` |
+| `brew` | `$BREW_CALLS` | `BREW_OUTDATED_*` (and `_FORMULA_AFTER`), `BREW_UPGRADE_*` (and `*2` for the retry), `BREW_CASK_*`, `BREW_FETCH_RC`, `BREW_REINSTALL_RC`, `BREW_LIST_FILES`, `BREW_USES`, `BREW_LEAVES`, `BREW_PREFIX[_RC]`, `BREW_REPOSITORY`, `BREW_CASKROOM`, `BREW_DOCTOR_OUTPUT`/`BREW_DOCTOR_RC` (`brew doctor`), `BREW_BUILD_LOG` (the upgrade writes a build log under `~/Library/Logs/Homebrew/<f>/`), `BREW_HANG_ON` (a subcommand that never ends, for Ctrl-C tests), `BREW_STDIN_FILE` (`brew update` records whether its stdin is a terminal and the line it reads) |
 | `port` | `$PORT_CALLS` | `PORT_VERSION_*`, `PORT_SELFUPDATE_RC`, `PORT_OUTDATED[_AFTER]`, `PORT_UPGRADE_*`, `PORT_INSTALL_RC`, `PORT_AVAILABLE`, `PORT_CONTENTS`, `PORT_INACTIVE`, `PORT_LEAVES` |
 | `sudo` | `$SUDO_CALLS` | `SUDO_DENY=1` simulates an authentication that can't happen |
 | `osascript` | `$OSASCRIPT_CALLS` | — (no notification pops up during the tests) |
 | `xcodebuild`, `xcode-select` | `$XCODEBUILD_CALLS` (xcodebuild) | `XCODEBUILD_LICENSE_RC`, `XCODEBUILD_FIRSTLAUNCH_RC`, `XCODEBUILD_DOWNLOAD_RC`, `XCODE_SELECT_PATH`: nothing is downloaded, and the tests don't depend on how Xcode is set up on the machine |
 | `id`, `bioutil`, `chown` | `$CHOWN_CALLS` (chown) | `FAKE_UID`, `BIOUTIL_TEMPLATES`: `praetorian-sudo-setup` as a fake root |
 | `mktemp` | — | gives Linux the macOS `mktemp -t prefix` behavior (passes through on macOS) |
+| `caffeinate` (written by `tests/options.bats` into the test's temp directory, not in `tests/stubs/`) | `$CAFFEINATE_CALLS` | checks the re-exec under `caffeinate` without keeping the machine awake |
 
 The fake `port` is only installed (in `$PRAETORIAN_PORT_PREFIX/bin`) by tests that call `with_macports`, so the other tests run without MacPorts. Each variable is documented at the top of its fake. A test typically sets a few variables, runs praetorian, and checks both the output and the recorded calls: that a command ran, or, for fail-safe behavior, that it did **not**.
 
@@ -585,20 +627,29 @@ The fake `port` is only installed (in `$PRAETORIAN_PORT_PREFIX/bin`) by tests th
 
 The tests run in the container as **your** user (`--user $(id -u):$(id -g)`), not as root: praetorian refuses root, and only loads `lib/` files owned by the user running it.
 
+Some tests are skipped depending on the platform, with the reason printed by bats:
+
+- `tests/interactive.bats` (praetorian under a pseudo-terminal, as when started by hand) needs `script(1)`: it runs on macOS (`ci/macos-tests`) and is skipped in the Linux container, which has no `script`. Every other file runs without a terminal, so in unattended mode.
+- "started as root" needs real root or `unshare -r` (a user namespace, Linux); "file owned by another user" needs real root to `chown`. Both are skipped elsewhere, and a few tests that assume a non-root user are skipped when run as root.
+- Tests that need a setuid-root `/usr/bin/sudo`, `git` or `tar` are skipped where those are missing, and a couple of tests that would reach a real Homebrew are skipped on a machine where one is installed.
+
 ### Conventions
 
 - bash 3.2 compatible (macOS's `/bin/bash`): no associative arrays, no `mapfile`, no `declare -g`, no negative array indices.
-- `set -euo pipefail`. A planned exit is `finish <code>`, never `exit`, or it's reported as unexpected. (The only `exit` left is in the `lib/` check, which runs before anything is loaded.)
+- `set -euo pipefail`. A planned exit is `finish <code>`, never `exit`, or it's reported as unexpected. (The only `exit` calls left are in the root and `lib/` checks of `praetorian`, which run before `finish` is loaded.)
+- Formatting: `shfmt -i 4 -ci` (`ci/check fix-format`); ShellCheck at `--severity=style` with no finding. See also [CONTRIBUTING.md](CONTRIBUTING.md) and `.editorconfig`.
+- Code, comments, documentation and terminal output in English.
+- Never run Homebrew developer commands (`brew cat`, `brew linkage`, anything in `dev-cmd/`), not even while debugging: they silently switch Homebrew to its development branch ([decision 13](#13-stay-on-homebrews-stable-channel)).
 - No apostrophe inside `"${var:-default}"`: bash 3.2 and 5 parse it as an opening quote.
-- A function whose failure must stop the session isn't called on the left of `||` or `&&`: `set -e` is off inside it there. `migrate` returns 0 and reports its outcome through `BLOCKERS` for that reason.
+- A function whose failure must stop the session isn't called on the left of `||` or `&&`, or in an `if`: `set -e` is off inside it there. `migrate` and its steps return 0 and report their outcome through `BLOCKERS` for that reason; `summary`, whose return code is the session's, is called with `set -e` suspended explicitly around that one call.
 - Counters are incremented with `x=$((x + 1))`, not `x+=1` (which appends text unless the variable was declared `-i`, and ShellCheck can't see that across files).
 - ShellCheck checks every file on its own too. A global set in one file and used in another needs a one-line `# shellcheck disable=SC2034` (or `SC2153`) with the reason, on that line only.
 
 ---
 
-## History: the 2026-10-15 incident
+## Project history: the 2026-10-15 incident
 
-The day that shaped version 1.1.0.
+This is how the project came about, kept for the reasoning behind the design. It happened on the author's Intel MacBook Pro (2018, macOS 15); the paths, versions and files below are from that machine, not requirements. The day shaped version 1.1.0.
 
 **Starting point:** "brew update doesn't work". `brew update` itself was fine. `brew upgrade` was failing.
 
@@ -640,20 +691,22 @@ The day that shaped version 1.2.0.
 
 ## Known limitations and ideas
 
-- **The auto-fixes have only been checked against real logs and the fakes.** Their detection matches the actual 2026-10-15 logs, and the tests cover all four Homebrew fixes (download, unlink, stale library, Metal Toolchain) with fake `brew` and `xcodebuild`, but none of them has fired during a real praetorian session yet. In particular, the real `xcodebuild -downloadComponent MetalToolchain` (a download from Apple into Xcode) is never run by the tests: it was only checked by hand on 2026-10-15, like the real `brew` and `port` commands, which the tests never run either.
+- **The auto-fixes have only been checked against real logs and the fakes.** Their detection matches the real logs of the [project history](#project-history-the-2026-10-15-incident), and the tests cover all four Homebrew fixes (download, unlink, stale library, Metal Toolchain) with fake `brew` and `xcodebuild`, but none of them has fired during a real praetorian session yet. In particular, the real `xcodebuild -downloadComponent MetalToolchain` (a download from Apple into Xcode) is never run by the tests: it was only checked by hand on 2026-10-15, like the real `brew` and `port` commands, which the tests never run either.
 - **A library upgrade can break whatever depends on it.** Upgrading `ada-url` on its own broke the installed `node` until `node` rebuilt. Ideas: upgrade only the formulae you installed yourself and let brew handle their dependencies, or check dependents with `otool -L` after each upgrade (never with `brew linkage`, a developer command).
 - **Display glitch:** a deferred cask first prints a red `✗ … (code 1)` line, then the "deferred" warning. The counters are right.
 - **`latest` casks are reinstalled on every run** because of `--greedy`. `--greedy-auto-updates` would avoid that.
 - **No time estimate.** Recording build durations per formula would make it possible to show an estimated total and offer a `--quick` mode that skips the long builds.
 - **No scheduler yet.** A `launchd` agent running `--unattended` overnight would make the long builds painless; the mode and the notification are ready for it.
 - **Fewer formulae, faster runs.** On an Intel Mac, every formula you keep gets recompiled on each update. Pruning unused ones is the biggest time saver.
-- **MacPorts maintenance is only partly checked against the real thing.** MacPorts 2.12.7 is installed on the target Mac, and `port version` and `port echo all` (used by `--migration-report`) have run for real. The rest (`port outdated` lines with `<`, `Error: Failed to <phase> <port>`, `Error: See …/main.log`, `does not match expected platform`, `port contents`) is tested with the fake `port` only, based on MacPorts' documented behavior. Watch the first real maintenance session and the first `--migrate`, and adjust the patterns if needed.
+- **MacPorts maintenance is only partly checked against the real thing.** On the development Mac (MacPorts 2.12.7), `port version` and `port echo all` (used by `--migration-report`) have run for real. The rest (`port outdated` lines with `<`, `Error: Failed to <phase> <port>`, `Error: See …/main.log`, `does not match expected platform`, `port contents`) is tested with the fake `port` only, based on MacPorts' documented behavior. Watch the first real maintenance session and the first `--migrate`, and adjust the patterns if needed.
 - **`--migrate` compares command names only.** A port can provide the same commands with different defaults or variants; praetorian doesn't run them to compare behavior.
 - **Port name guesses are heuristic** (see the [rules](#migrating-one-formula-at-a-time)). Always check with `port info <port>` before `--migrate formula=port`.
 - **No `--migrate` for several formulae at once**, on purpose: each migration should be checked before the next. A shell loop works if you really want one.
 - **The lock only knows about praetorian.** A `brew` or `port` you start by hand during a session isn't detected (both have their own internal locks).
 - **`.lock` can falsely block** if the PID of a crashed session is reused by another process. The block message gives the command to remove the lock.
-- `shellcheck` runs in CI (`ci/check`) rather than locally: installing it through Homebrew means compiling Haskell.
+- **Cask repair can't bring back files outside the Caskroom.** See [auto-fixes](#4-auto-fixes-then-one-retry).
+- **`PRAETORIAN_HOME` outside the repository isn't scanned by Gitleaks** (`ci/check secrets` only reads the clone).
+- ShellCheck and the other tools run in containers (`ci/check`) rather than being installed on the Mac: on an Intel Mac, installing ShellCheck through Homebrew means compiling Haskell.
 
 ---
 
