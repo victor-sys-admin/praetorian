@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 victor-sys-admin
+#
+# praetorian-sudo-setup — turns on Touch ID for sudo (run once).
+#
+# Why Touch ID rather than a stored password:
+#   - PCI DSS v4 8.6.2: no password of an interactive account hard-coded
+#     in a script or a configuration file;
+#   - CIS Apple macOS Benchmark: "sudo timeout period set to zero"
+#     (already applied here through /etc/sudoers.d/10_cissudoconfiguration)
+#     and a timestamp per tty — no background process may keep root
+#     rights alive.
+# Touch ID keeps the physical-presence, strong-factor requirement with no
+# stored secret, and works alongside timestamp_timeout=0.
+#
+# /etc/pam.d/sudo_local is the file Apple provides (since Sonoma) to
+# survive macOS updates, unlike /etc/pam.d/sudo.
+#
+# Usage: sudo ./praetorian-sudo-setup [--disable | --help]
+#
+# Exit codes: 0 done (or nothing to do), 1 error (not root, no
+# fingerprint, refused PRAETORIAN_SUDO_LOCAL, unknown option).
+#
+# PRAETORIAN_SUDO_LOCAL: tests only (file written instead of
+# /etc/pam.d/sudo_local). The script runs as root, so the variable would
+# let anyone able to pass it through "sudo -E" overwrite any file: it is
+# only honoured outside a real sudo (SUDO_USER empty), for an absolute
+# path that is not a symlink and lies outside /etc, /private/etc,
+# /System and /usr.
+#
+set -euo pipefail
+
+readonly DEFAULT_TARGET=/etc/pam.d/sudo_local
+readonly LINE='auth       sufficient     pam_tid.so'
+readonly ACTIVE_RE='^[[:space:]]*auth[[:space:]].*pam_tid\.so'
+# pam_reattach (Touch ID inside tmux) must run before pam_tid.
+readonly REATTACH_RE='^[[:space:]]*auth[[:space:]].*pam_reattach\.so'
+
+usage() {
+    cat <<EOF
+Usage: sudo $0 [--disable | --help]
+
+Turns on Touch ID for sudo in ${DEFAULT_TARGET} (backup kept next to it).
+
+  --disable   comment the pam_tid line out again
+  -h, --help  show this help
+EOF
+}
+
+case "${1:-}" in
+    "" | --disable) ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        usage >&2
+        exit 1
+        ;;
+esac
+if [[ $# -gt 1 ]]; then
+    echo "Too many arguments: $*" >&2
+    usage >&2
+    exit 1
+fi
+
+# id -u rather than EUID: the tests replace id.
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo "Run it with sudo: sudo $0 $*" >&2
+    exit 1
+fi
+
+TARGET=${DEFAULT_TARGET}
+if [[ -n "${PRAETORIAN_SUDO_LOCAL:-}" ]]; then
+    case "${PRAETORIAN_SUDO_LOCAL}" in
+        /etc/* | /private/etc/* | /System/* | /usr/* | */../* | */..) refused=1 ;;
+        /*) refused=0 ;;
+        *) refused=1 ;;
+    esac
+    if [[ -n "${SUDO_USER:-}" || -L "${PRAETORIAN_SUDO_LOCAL}" ]]; then
+        refused=1
+    fi
+    if [[ "${refused}" -eq 1 ]]; then
+        echo "PRAETORIAN_SUDO_LOCAL is for the tests only: refused under sudo," >&2
+        echo "for a symlink or under /etc, /System, /usr (${PRAETORIAN_SUDO_LOCAL})." >&2
+        exit 1
+    fi
+    TARGET=${PRAETORIAN_SUDO_LOCAL}
+fi
+readonly TARGET
+
+# Every write goes through ${TARGET}.tmp then mv: never leave it behind
+# in /etc/pam.d if something fails halfway.
+trap 'rm -f "${TARGET}.tmp"' EXIT
+
+# Backup next to the file; the PID keeps two runs in the same second
+# from overwriting each other's backup.
+backup() {
+    cp -p "${TARGET}" "${TARGET}.bak.$(date +%Y%m%d%H%M%S).$$"
+}
+
+# rewrite <sed expression>: edits TARGET through a temp file (no "sed -i",
+# whose syntax differs between macOS and Linux). The original stays
+# intact if anything fails.
+rewrite() {
+    sed -E "$1" "${TARGET}" >"${TARGET}.tmp"
+    mv "${TARGET}.tmp" "${TARGET}"
+}
+
+# Same owner and mode as Apple's sudo_local.template.
+seal() {
+    chown root:wheel "${TARGET}"
+    chmod 444 "${TARGET}"
+}
+
+if [[ "${1:-}" == --disable ]]; then
+    if [[ -f "${TARGET}" ]] && grep -qE "${ACTIVE_RE}" "${TARGET}"; then
+        backup
+        rewrite 's/^([[:space:]]*auth[[:space:]].*pam_tid\.so)/#\1/'
+        seal
+        echo "Touch ID for sudo turned off (backup next to ${TARGET})."
+    else
+        echo "Touch ID for sudo wasn't on."
+    fi
+    exit 0
+fi
+
+# At least one fingerprint enrolled for the user who ran sudo. bioutil
+# reads the CURRENT user's configuration: as root it would look at root's,
+# so it runs as that user.
+fingerprints() {
+    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
+        sudo -u "${SUDO_USER}" bioutil -c
+    else
+        bioutil -c
+    fi
+}
+if ! fingerprints 2>/dev/null | grep -qE '[1-9][0-9]* biometric template'; then
+    echo "No fingerprint enrolled for ${SUDO_USER:-this user} (System Settings > Touch ID)." >&2
+    exit 1
+fi
+
+if [[ -f "${TARGET}" ]] && grep -qE "${ACTIVE_RE}" "${TARGET}"; then
+    echo "Touch ID for sudo is already on (${TARGET})."
+    exit 0
+fi
+
+if [[ -f "${TARGET}" ]]; then
+    backup
+    # Commented line (copy of Apple's template): uncomment it.
+    if grep -qE '^#[[:space:]]*auth[[:space:]].*pam_tid\.so' "${TARGET}"; then
+        rewrite 's/^#[[:space:]]*(auth[[:space:]].*pam_tid\.so)/\1/'
+    else
+        # pam_tid must come before the other modules: top of the file,
+        # or right after the last pam_reattach line, which has to stay
+        # ahead of it (Touch ID inside tmux).
+        reattach=$(grep -nE "${REATTACH_RE}" "${TARGET}" | tail -n 1 | cut -d: -f1 || true)
+        awk -v line="${LINE}" -v after="${reattach:-0}" '
+            after == 0 && NR == 1 { print line }
+            { print }
+            NR == after { print line }
+            END { if (NR == 0) print line }
+        ' "${TARGET}" >"${TARGET}.tmp"
+        mv "${TARGET}.tmp" "${TARGET}"
+    fi
+else
+    cat >"${TARGET}.tmp" <<EOF
+# sudo_local: local config file which survives system update and is included for sudo
+# Touch ID for sudo — added by praetorian-sudo-setup on $(date '+%Y-%m-%d')
+${LINE}
+EOF
+    mv "${TARGET}.tmp" "${TARGET}"
+fi
+seal
+
+echo "Touch ID for sudo turned on (${TARGET})."
+echo "Test it in a NEW terminal: sudo -k; sudo true"
+echo "The password still works as a fallback (\"Use Password\" button)."
