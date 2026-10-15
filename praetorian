@@ -22,39 +22,7 @@
 # Terminal output stays short on purpose: the full output of every
 # command is in the session log.
 #
-# Since 1.1.0:
-#   - Ctrl-C stops the whole session cleanly (no more cascade of steps
-#     failing with code 130).
-#   - The session runs under caffeinate: the Mac doesn't sleep during
-#     long builds (overnight network drops broke svn/git downloads).
-#   - brew errors are pulled from the log and summarized on screen.
-#   - Quarantine: a package that fails for a cause that won't go away on
-#     its own (full Xcode required, broken cask pkg script) is set aside
-#     and skipped by later sessions instead of failing every time.
-#     Entries expire after QUARANTINE_DAYS days; Xcode-related ones are
-#     lifted as soon as Xcode.app is installed. Build failures (formula
-#     bugs on Intel) are quarantined QUARANTINE_BUILD_DAYS days,
-#     dependents included.
-#   - Formulae and casks are upgraded one at a time (one failure no
-#     longer blocks the others).
-#   - brew build logs are archived before brew cleanup (which deletes
-#     them), and half-upgraded casks are repaired.
-#   - Intel Mac detection: Homebrew no longer ships bottles there (tier 3
-#     since Sept. 2026), everything compiles from source.
-#
-# Since 1.2.0:
-#   - MacPorts: selfupdate, port upgrades, removal of inactive versions,
-#     quarantine of ports that fail to upgrade. Homebrew becomes optional
-#     (MacPorts alone is enough).
-#   - Homebrew → MacPorts migration: --migration-report (read-only) and
-#     --migrate <formula>[=<port>] (installs the port, checks it, and only
-#     then uninstalls the formula).
-#   - Every block is fully explained: why, what was NOT done, how to
-#     unblock, where the log is (see block).
-#   - Fail-safe: session lock, minimum free disk space, nothing removed
-#     without checking first.
-#   - Code split by topic in lib/, checked before it's loaded (owner,
-#     permissions, no symbolic link). Every unplanned exit is explained.
+# What changed in each version: CHANGELOG.md.
 #
 # Usage   : ./praetorian [--dry-run] [--no-greedy] [--retry-quarantined]
 #                        [--unattended] [--quiet] [--help]
@@ -67,7 +35,8 @@
 # Exit codes:
 #   0   full success
 #   1   prerequisite error (no package manager, root, Xcode not ready,
-#       disk full, another session running) or migration report blocked
+#       disk full, another session running, invalid PRAETORIAN_HOME) or
+#       migration report blocked
 #   2   one or more steps failed or were blocked
 #   130 interrupted (Ctrl-C)
 #
@@ -76,8 +45,12 @@ set -euo pipefail
 # ----------------------------------------------------------------------------
 # Constants
 # ----------------------------------------------------------------------------
-readonly PRAETORIAN_VERSION="1.2.1"
-readonly PRAETORIAN_HOME="${HOME}/praetorian"
+readonly PRAETORIAN_VERSION="1.3.0"
+# State directory (logs, quarantine, lock): PRAETORIAN_HOME from the
+# environment, ~/praetorian by default. Checked by check_home once lib/
+# is loaded, before anything is written.
+PRAETORIAN_HOME="${PRAETORIAN_HOME:-${HOME}/praetorian}"
+readonly PRAETORIAN_HOME
 readonly LOG_DIR="${PRAETORIAN_HOME}/logs"
 readonly LOG_RETENTION=30          # number of log files to keep
 readonly UNUSED_THRESHOLD_DAYS=180 # 6 months
@@ -224,8 +197,26 @@ check_libs() {
     exit 1
 }
 
+# Never as root. Checked before check_libs: under sudo, lib/ belongs to
+# the user, not to root, and the lib/ check would report a misleading
+# "belongs to another user". lib/session.sh checks it again (harmless).
+check_not_root() {
+    [[ "${EUID}" -eq 0 ]] || return 0
+    {
+        echo ""
+        echo "✗ BLOCKED: praetorian was started as root"
+        echo "    Why        : Homebrew refuses to run as root, and praetorian asks for sudo itself, one command at a time, only when MacPorts or a cask needs it."
+        echo "    Impact     : Nothing was done: no command was run, no log was written."
+        echo "    What to do : Run it again without sudo: ${PRAETORIAN_ROOT}/praetorian"
+        echo "    Log        : none (this check runs before logging starts)"
+        echo ""
+    } >&2
+    exit 1
+}
+
 PRAETORIAN_ROOT=$(praetorian_dir)
 readonly PRAETORIAN_ROOT
+check_not_root
 check_libs "${PRAETORIAN_ROOT}"
 # Same order as PRAETORIAN_LIBS. Written out so ShellCheck follows them.
 # shellcheck source=lib/ui.sh
@@ -242,6 +233,27 @@ source "${PRAETORIAN_ROOT}/lib/macports.sh"
 source "${PRAETORIAN_ROOT}/lib/migrate.sh"
 # shellcheck source=lib/report.sh
 source "${PRAETORIAN_ROOT}/lib/report.sh"
+
+# PRAETORIAN_HOME must be an absolute path on one line: a relative one
+# would follow the current directory, a newline would break the paths
+# written to the log. Plain output: block() writes to the log, which
+# lives under that very directory.
+check_home() {
+    if [[ "${PRAETORIAN_HOME}" == /* && "${PRAETORIAN_HOME}" != *$'\n'* ]]; then
+        return 0
+    fi
+    {
+        echo ""
+        echo "${C_RED}${C_BOLD}✗ BLOCKED: PRAETORIAN_HOME is not usable${C_RESET}"
+        echo "    Why        : PRAETORIAN_HOME must be an absolute path on a single line; got: $(printf '%q' "${PRAETORIAN_HOME}")"
+        echo "    Impact     : Nothing was done: no command was run, no log was written."
+        echo "    What to do : Set an absolute path, e.g. export PRAETORIAN_HOME=\"\${HOME}/praetorian\","
+        echo "                 or unset it to use the default (~/praetorian)."
+        echo ""
+    } >&2
+    finish 1
+}
+check_home
 
 # ----------------------------------------------------------------------------
 # Help
@@ -397,9 +409,15 @@ main() {
     fi
     rotate_logs
 
-    # summary returns 2 when something failed; pass the code on.
+    # summary returns 2 when something failed; pass the code on. Not
+    # "summary || final_rc=$?": that would turn set -e off inside summary
+    # without saying so. errexit is suspended explicitly for this one
+    # call instead (summary only prints), then restored.
     local final_rc=0
-    summary || final_rc=$?
+    set +e
+    summary
+    final_rc=$?
+    set -e
     finish "${final_rc}"
 }
 
