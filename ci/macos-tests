@@ -1,0 +1,49 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 victor-sys-admin
+#
+# ci/macos-tests — the bats suite on macOS, under macOS's own /bin/bash 3.2
+# and BSD tools (the container of ci/check is Linux with bash 5).
+#
+# bats-core is fetched at a pinned commit into a temp directory: nothing is
+# installed. The fakes of tests/stubs replace brew, port, sudo and
+# osascript, as in the container; HOME is a temp directory.
+#
+# Usage: ci/macos-tests [bats options]
+#
+set -euo pipefail
+
+readonly BATS_REPO=https://github.com/bats-core/bats-core
+readonly BATS_TAG=v1.14.0
+readonly BATS_COMMIT=eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
+
+if [[ "$(uname -s)" != Darwin ]]; then
+    echo "ci/macos-tests: macOS only (ci/check covers Linux)." >&2
+    exit 1
+fi
+if [[ "$(id -u)" -eq 0 ]]; then
+    echo "ci/macos-tests: don't run it as root (praetorian refuses root)." >&2
+    exit 1
+fi
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+readonly ROOT
+WORK=$(mktemp -d -t praetorian-ci)
+readonly WORK
+trap 'rm -rf "${WORK}"' EXIT
+
+# Fetched by commit, not by tag (a tag can be moved): BATS_TAG is only
+# the human-readable name of BATS_COMMIT.
+git init --quiet "${WORK}/bats"
+git -C "${WORK}/bats" fetch --quiet --depth 1 "${BATS_REPO}" "${BATS_COMMIT}"
+git -c advice.detachedHead=false -C "${WORK}/bats" checkout --quiet FETCH_HEAD
+if [[ "$(git -C "${WORK}/bats" rev-parse HEAD)" != "${BATS_COMMIT}" ]]; then
+    echo "ci/macos-tests: got another commit than ${BATS_COMMIT} (${BATS_TAG}): stopped." >&2
+    exit 1
+fi
+
+# /bin first: "#!/usr/bin/env bash" then finds /bin/bash 3.2, not a newer
+# bash from Homebrew; BSD tools rather than GNU ones.
+export PATH=/bin:/usr/bin:/usr/sbin:/sbin
+echo "bash: $(bash --version | head -n 1)"
+/bin/bash "${WORK}/bats/bin/bats" --print-output-on-failure "$@" "${ROOT}/tests"
