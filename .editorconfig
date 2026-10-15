@@ -1,0 +1,34 @@
+# https://editorconfig.org — matches ci/check (shfmt -i 4 -ci).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Shell: praetorian, praetorian-sudo-setup, lib/*.sh, ci/*, tests/*.bats,
+# tests/stubs/* (most have no extension).
+[{praetorian,praetorian-sudo-setup,*.sh,*.bats,ci/*,tests/stubs/*}]
+indent_style = space
+indent_size = 4
+# Read by shfmt when it's given no -i flag.
+switch_case_indent = true
+
+[*.md]
+indent_style = space
+indent_size = 2
+# Two trailing spaces can mean a line break in Markdown.
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.toml]
+indent_style = space
+indent_size = 4
+
+[LICENSE]
+indent_style = unset
+indent_size = unset
