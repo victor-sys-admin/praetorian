@@ -27,11 +27,30 @@ readonly IMG_BATS="docker.io/bats/bats:1.14.0@sha256:5322b877351fda0cc435de8c611
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 readonly ROOT
-readonly SCRIPTS=(praetorian lib/ui.sh lib/session.sh lib/quarantine.sh lib/brew.sh
-    lib/macports.sh lib/migrate.sh lib/report.sh praetorian-sudo-setup ci/check ci/macos-tests
-    tests/praetorian.bats tests/stubs/brew tests/stubs/port tests/stubs/sudo
-    tests/stubs/mktemp tests/stubs/id tests/stubs/bioutil tests/stubs/chown tests/stubs/osascript
-    tests/stubs/xcodebuild tests/stubs/xcode-select)
+# Globs below are relative to the repository, sorted byte-wise (C locale)
+# so the file list is the same on every machine.
+cd "${ROOT}" || exit 1
+export LC_ALL=C
+
+# Every shell file of the project, found by glob so a new library, test
+# file or fake is checked without editing this list. Regular files only
+# (a symbolic link could point outside the read-only mount). bash 3.2
+# compatible: ci/check also runs on macOS's /bin/bash.
+declare -a SCRIPTS=()
+collect_scripts() {
+    local f restore
+    restore=$(shopt -p nullglob || true)
+    shopt -s nullglob
+    for f in praetorian praetorian-sudo-setup lib/*.sh ci/* tests/*.bats tests/stubs/*; do
+        [[ -f "${f}" && ! -L "${f}" ]] && SCRIPTS+=("${f}")
+    done
+    eval "${restore}"
+    if ((${#SCRIPTS[@]} == 0)); then
+        echo "ci/check: no shell file found under ${ROOT}." >&2
+        exit 1
+    fi
+}
+collect_scripts
 
 ENGINE=${CONTAINER_ENGINE:-}
 if [[ -z "${ENGINE}" ]]; then
@@ -94,9 +113,11 @@ run_format() {
         -d -i 4 -ci "${SCRIPTS[@]}"
 }
 
+# --max-archive-depth: also looks inside archives, such as the build log
+# archives (logs/*.tar.gz) of a local install (gzip, then tar: depth 2).
 run_secrets() {
     check "Secrets (Gitleaks)" true box "${IMG_GITLEAKS}" -- \
-        dir --no-banner --redact --config .gitleaks.toml .
+        dir --no-banner --redact --max-archive-depth 2 --config .gitleaks.toml .
 }
 
 run_workflows() {
