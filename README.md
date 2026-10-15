@@ -28,7 +28,6 @@ It was built for, and hardened on, an **Intel MacBook Pro (2018) running macOS 1
 - [Security: how sudo is handled](#security-how-sudo-is-handled)
 - [Development](#development)
 - [History: the 2026-10-15 incident](#history-the-2026-10-15-incident)
-- [Changelog](#changelog)
 - [Known limitations and ideas](#known-limitations-and-ideas)
 - [References](#references)
 - [License](#license)
