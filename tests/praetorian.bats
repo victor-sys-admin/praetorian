@@ -40,12 +40,12 @@ with_macports() {
     [[ "${output}" == *"Usage: praetorian"* ]]
 }
 
-@test "version: --help and the README changelog agree" {
-    local readme
-    readme=$(sed -nE 's/^### ([0-9]+\.[0-9]+\.[0-9]+) .*/\1/p' "${BATS_TEST_DIRNAME}/../README.md" | head -n 1)
-    [ -n "${readme}" ]
+@test "version: --help shows PRAETORIAN_VERSION, a X.Y.Z version" {
+    local version
+    version=$(sed -nE 's/^readonly PRAETORIAN_VERSION="([^"]*)"$/\1/p' "${BATS_TEST_DIRNAME}/../praetorian")
+    [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
     run "${PRAETORIAN}" --help
-    [[ "${output}" == *"praetorian ${readme} "* ]]
+    [[ "${output}" == *"praetorian ${version} "* ]]
 }
 
 @test "unknown option: code 1" {
@@ -604,6 +604,9 @@ in_praetorian() {
 @test "half-installed cask → forced uninstall then reinstall" {
     export BREW_OUTDATED_CASK=bar BREW_CASK_RC=1
     export BREW_CASK_OUTPUT="Error: It seems there is already a Font at '/x/Ubuntu.ttf'."
+    # The Caskroom entry is backed up before the forced uninstall.
+    export BREW_CASKROOM="${BATS_TEST_TMPDIR}/Caskroom"
+    mkdir -p "${BREW_CASKROOM}/bar/1.0"
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
     grep -qx 'uninstall --cask --force bar' "${BREW_CALLS}"
