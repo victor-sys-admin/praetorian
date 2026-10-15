@@ -1,0 +1,11 @@
+# Default Gitleaks rules. The local files (session logs, quarantine) are
+# scanned too: a token printed by brew or port must be caught there
+# before it could be copied anywhere. Only .git/ is skipped.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "git internals"
+paths = [
+    '''(^|/)\.git/''',
+]
