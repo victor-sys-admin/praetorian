@@ -45,5 +45,9 @@ fi
 # /bin first: "#!/usr/bin/env bash" then finds /bin/bash 3.2, not a newer
 # bash from Homebrew; BSD tools rather than GNU ones.
 export PATH=/bin:/usr/bin:/usr/sbin:/sbin
+# The tests set up their own HOME and prefixes: a value from your shell
+# (PRAETORIAN_HOME pointing at your real state, for one) must not leak in.
+unset PRAETORIAN_HOME PRAETORIAN_PORT_PREFIX PRAETORIAN_SUDO_LOCAL PRAETORIAN_MIN_FREE_GB PRAETORIAN_CAFFEINATED
+# Every tests/*.bats file is run: bats takes the whole directory.
 echo "bash: $(bash --version | head -n 1)"
 /bin/bash "${WORK}/bats/bin/bats" --print-output-on-failure "$@" "${ROOT}/tests"
