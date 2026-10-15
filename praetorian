@@ -1,0 +1,410 @@
+#!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 victor-sys-admin
+#
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version. It is distributed WITHOUT ANY WARRANTY; see
+# the LICENSE file for details.
+#
+# praetorian — Homebrew and MacPorts maintenance for macOS
+#
+# Runs, in order: brew update, upgrade (formulae + casks), autoremove,
+# cleanup, then MacPorts maintenance (selfupdate, upgrade, cleanup) and
+# brew doctor. Keeps going when a step fails, logs every detail, and
+# lists the apps not opened in the last 6 months.
+#
+# The code is split by topic in lib/ (see the loading section below);
+# this file holds the constants, the options and main.
+#
+# Terminal output stays short on purpose: the full output of every
+# command is in the session log.
+#
+# Since 1.1.0:
+#   - Ctrl-C stops the whole session cleanly (no more cascade of steps
+#     failing with code 130).
+#   - The session runs under caffeinate: the Mac doesn't sleep during
+#     long builds (overnight network drops broke svn/git downloads).
+#   - brew errors are pulled from the log and summarized on screen.
+#   - Quarantine: a package that fails for a cause that won't go away on
+#     its own (full Xcode required, broken cask pkg script) is set aside
+#     and skipped by later sessions instead of failing every time.
+#     Entries expire after QUARANTINE_DAYS days; Xcode-related ones are
+#     lifted as soon as Xcode.app is installed. Build failures (formula
+#     bugs on Intel) are quarantined QUARANTINE_BUILD_DAYS days,
+#     dependents included.
+#   - Formulae and casks are upgraded one at a time (one failure no
+#     longer blocks the others).
+#   - brew build logs are archived before brew cleanup (which deletes
+#     them), and half-upgraded casks are repaired.
+#   - Intel Mac detection: Homebrew no longer ships bottles there (tier 3
+#     since Sept. 2026), everything compiles from source.
+#
+# Since 1.2.0:
+#   - MacPorts: selfupdate, port upgrades, removal of inactive versions,
+#     quarantine of ports that fail to upgrade. Homebrew becomes optional
+#     (MacPorts alone is enough).
+#   - Homebrew → MacPorts migration: --migration-report (read-only) and
+#     --migrate <formula>[=<port>] (installs the port, checks it, and only
+#     then uninstalls the formula).
+#   - Every block is fully explained: why, what was NOT done, how to
+#     unblock, where the log is (see block).
+#   - Fail-safe: session lock, minimum free disk space, nothing removed
+#     without checking first.
+#   - Code split by topic in lib/, checked before it's loaded (owner,
+#     permissions, no symbolic link). Every unplanned exit is explained.
+#
+# Usage   : ./praetorian [--dry-run] [--no-greedy] [--retry-quarantined]
+#                        [--unattended] [--quiet] [--help]
+#           ./praetorian --migration-report
+#           ./praetorian [--dry-run] --migrate <formula>[=<port>]
+#           (--migrate=<formula>[=<port>] works too; -h = --help)
+# Author  : victor-sys-admin
+# License : GPL-3.0-or-later (see LICENSE)
+#
+# Exit codes:
+#   0   full success
+#   1   prerequisite error (no package manager, root, Xcode not ready,
+#       disk full, another session running) or migration report blocked
+#   2   one or more steps failed or were blocked
+#   130 interrupted (Ctrl-C)
+#
+set -euo pipefail
+
+# ----------------------------------------------------------------------------
+# Constants
+# ----------------------------------------------------------------------------
+readonly PRAETORIAN_VERSION="1.2.1"
+readonly PRAETORIAN_HOME="${HOME}/praetorian"
+readonly LOG_DIR="${PRAETORIAN_HOME}/logs"
+readonly LOG_RETENTION=30          # number of log files to keep
+readonly UNUSED_THRESHOLD_DAYS=180 # 6 months
+readonly APP_DIR="/Applications"
+# Quarantine: one package per line, tab-separated fields:
+#   name  type(formula|cask|port)  epoch  cause(xcode|pkg|build)  detail
+readonly QUARANTINE_FILE="${PRAETORIAN_HOME}/quarantine.tsv"
+readonly QUARANTINE_DAYS=30
+# Build failures: often fixed by a new formula revision, so retried sooner.
+readonly QUARANTINE_BUILD_DAYS=7
+# Toolchain seen by the previous session ("xcode" or "clt"): when it
+# changes, build failures deserve another try.
+readonly TOOLCHAIN_FILE="${PRAETORIAN_HOME}/.toolchain"
+# MacPorts: fixed prefix, called by absolute path (under sudo too, so a
+# "port" found in the PATH is never run as root).
+# PRAETORIAN_PORT_PREFIX is for tests only. It can't be used to get a
+# binary run as root: before the real sudo runs it, PORT_BIN must belong
+# to root and be writable by root only (see port_bin_trusted).
+readonly PORT_PREFIX="${PRAETORIAN_PORT_PREFIX:-/opt/local}"
+readonly PORT_BIN="${PORT_PREFIX}/bin/port"
+# Formulae migrated to MacPorts: formula  port  epoch
+readonly MIGRATED_FILE="${PRAETORIAN_HOME}/migrated.tsv"
+# Lock: one session at a time (two brew/port runs on the same packages
+# corrupt installs).
+readonly LOCK_DIR="${PRAETORIAN_HOME}/.lock"
+# Free disk space (GB): blocking below MIN_FREE_GB (a build that fills the
+# disk leaves half-installed packages), warning below WARN_FREE_GB.
+# PRAETORIAN_MIN_FREE_GB: tests.
+readonly MIN_FREE_GB="${PRAETORIAN_MIN_FREE_GB:-5}"
+readonly WARN_FREE_GB=20
+# Shell startup files (relative to $HOME) searched for Homebrew paths
+# before a formula is uninstalled.
+readonly SHELL_RC_FILES=(.zshenv .zprofile .zshrc .zlogin .bash_profile .bashrc .profile .config/fish/config.fish)
+
+# Unique timestamp for the session
+RUN_TS="$(date +%Y%m%d_%H%M%S)"
+readonly RUN_TS
+readonly LOG_FILE="${LOG_DIR}/praetorian_${RUN_TS}.log"
+
+# Options (changed by flags)
+MODE=maintain   # maintain | report (--migration-report) | migrate
+MIGRATE_SPEC="" # "formula" or "formula=port"
+DRY_RUN=false
+GREEDY=true
+QUIET=false
+RETRY_QUARANTINED=false
+UNATTENDED=false           # --unattended, or automatic without a terminal
+SHOW_PROGRESS=true         # progress line (off during casks)
+declare -a DEFERRED=()     # deferred for lack of sudo (unattended mode)
+declare -a SUDO_CMD=(sudo) # "sudo -n" when unattended: never waits
+
+# Package managers found (see detect_managers)
+HAS_BREW=false
+HAS_PORT=false
+
+# Result counters
+declare -i STEP_OK=0
+declare -i STEP_FAIL=0
+declare -a FAILED_STEPS=()
+declare -a PROBLEMS=() # brew/port errors pulled from the output (deduplicated)
+declare -a NEWLY_QUARANTINED=()
+declare -a BLOCKERS=() # blocks explained by block()
+
+# Output of the last step run by run_step (for analysis).
+STEP_OUT=""
+STEP_PID=""            # PID of the running command (run_step)
+CURRENT_STEP=""        # label of the running step (error messages)
+LAST_BUILD_FAILS=""    # formulae whose build failed in the last step
+SESSION_QUARANTINED="" # names quarantined during this session
+LOCK_HELD=false
+PORT_LAST_OUT=""  # output of the last read-only port command (port_ro)
+OUTDATED_PORTS="" # outdated ports, one per line (port_refresh_outdated)
+
+# ----------------------------------------------------------------------------
+# Code loading
+#
+# The code is split by topic in lib/. Those files run with your rights and
+# start commands under sudo, so every one is checked before anything is
+# loaded: fixed list (no other file is ever loaded), regular file (no
+# symbolic link), owned by you or root, not writable by group or others,
+# and the same for the lib/ directory. Any problem stops praetorian before
+# it does anything.
+# ----------------------------------------------------------------------------
+readonly PRAETORIAN_LIBS=(ui session quarantine brew macports migrate report)
+
+# Real directory of this script, symbolic links resolved.
+praetorian_dir() {
+    local src=${BASH_SOURCE[0]} dir
+    while [[ -L "${src}" ]]; do
+        dir=$(CDPATH='' cd -P "$(dirname "${src}")" && pwd)
+        src=$(readlink "${src}")
+        [[ "${src}" == /* ]] || src="${dir}/${src}"
+    done
+    CDPATH='' cd -P "$(dirname "${src}")" && pwd
+}
+
+# lib_problem <path> <f|d>: why the path can't be trusted, nothing if it can.
+lib_problem() {
+    local path=$1 kind=$2 uid
+    uid=$(id -u)
+    if [[ -L "${path}" ]]; then
+        echo "is a symbolic link"
+    elif [[ "${kind}" == d && ! -d "${path}" ]] || [[ "${kind}" == f && ! -f "${path}" ]]; then
+        echo "is missing"
+    elif [[ -n "$(find "${path}" -maxdepth 0 ! -user "${uid}" ! -user 0)" ]]; then
+        echo "belongs to another user"
+    elif [[ -n "$(find "${path}" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]]; then
+        echo "is writable by group or others"
+    fi
+}
+
+# Checks lib/ and every file in PRAETORIAN_LIBS; on any problem, explains
+# it (block() isn't loaded yet, hence plain output) and stops.
+check_libs() {
+    local root=$1 dir="$1/lib" lib problem p
+    local -a problems=()
+    problem=$(lib_problem "${dir}" d)
+    [[ -z "${problem}" ]] || problems+=("lib/ ${problem}")
+    if [[ -d "${dir}" && ! -L "${dir}" ]]; then
+        for lib in "${PRAETORIAN_LIBS[@]}"; do
+            problem=$(lib_problem "${dir}/${lib}.sh" f)
+            [[ -z "${problem}" ]] || problems+=("lib/${lib}.sh ${problem}")
+        done
+    fi
+    ((${#problems[@]} > 0)) || return 0
+    {
+        echo ""
+        echo "✗ BLOCKED: praetorian's code in lib/ can't be trusted"
+        echo "    Why        : praetorian loads its code from ${dir} and runs commands under sudo with it."
+        echo "                 These files fail the safety check:"
+        for p in "${problems[@]}"; do
+            echo "                   - ${p}"
+        done
+        echo "    Impact     : Nothing was done: no command was run, no log was written."
+        echo "    What to do :"
+        echo "        First check that nobody changed the code:  git -C ${root} status && git -C ${root} diff"
+        echo "        Missing file:     git -C ${root} checkout -- lib/"
+        echo "        Writable:         chmod go-w ${dir} ${dir}/*.sh"
+        echo "        Another owner:    chown $(id -un 2>/dev/null || id -u) ${dir} ${dir}/*.sh   (after checking the content)"
+        echo "        Symbolic link:    replace it with the real file from the repository"
+        echo "    Log        : none (this check runs before logging starts)"
+        echo ""
+    } >&2
+    exit 1
+}
+
+PRAETORIAN_ROOT=$(praetorian_dir)
+readonly PRAETORIAN_ROOT
+check_libs "${PRAETORIAN_ROOT}"
+# Same order as PRAETORIAN_LIBS. Written out so ShellCheck follows them.
+# shellcheck source=lib/ui.sh
+source "${PRAETORIAN_ROOT}/lib/ui.sh"
+# shellcheck source=lib/session.sh
+source "${PRAETORIAN_ROOT}/lib/session.sh"
+# shellcheck source=lib/quarantine.sh
+source "${PRAETORIAN_ROOT}/lib/quarantine.sh"
+# shellcheck source=lib/brew.sh
+source "${PRAETORIAN_ROOT}/lib/brew.sh"
+# shellcheck source=lib/macports.sh
+source "${PRAETORIAN_ROOT}/lib/macports.sh"
+# shellcheck source=lib/migrate.sh
+source "${PRAETORIAN_ROOT}/lib/migrate.sh"
+# shellcheck source=lib/report.sh
+source "${PRAETORIAN_ROOT}/lib/report.sh"
+
+# ----------------------------------------------------------------------------
+# Help
+# ----------------------------------------------------------------------------
+usage() {
+    cat <<EOF
+${C_BOLD}praetorian ${PRAETORIAN_VERSION}${C_RESET} — Homebrew and MacPorts maintenance for macOS
+
+Usage: praetorian [options]
+       praetorian --migration-report
+       praetorian [--dry-run] --migrate <formula>[=<port>]
+
+Options:
+  --dry-run     Simulates without changing anything (shows the planned steps).
+  --no-greedy   Doesn't use --greedy for casks (lets self-updating apps
+                handle themselves).
+  --retry-quarantined
+                Also retries the quarantined packages.
+  --unattended  Nobody watching (overnight, launchd): nothing waits for
+                input, whatever needs sudo (casks with an installer, the
+                whole MacPorts part) is deferred, and a macOS notification
+                summarizes the session. Automatic when praetorian isn't
+                started from a terminal.
+                No password is ever stored (CIS / PCI DSS).
+  --quiet       Minimal screen output (everything stays in the log; blocks
+                are always shown).
+  --help, -h    Shows this help.
+
+Homebrew → MacPorts migration:
+  --migration-report
+                Read-only plan: for each formula you installed yourself, the
+                matching MacPorts port, and what would block its migration.
+                Changes nothing.
+  --migrate <formula>[=<port>]
+                Migrates ONE formula: checks (dependents, service, paths in
+                the shell), installs the port, checks that it provides the
+                same commands, and only then uninstalls the formula.
+                E.g.: --migrate wget   --migrate python@3.12=python312
+                (--migrate=<formula>[=<port>] works too)
+
+Logs       : ${LOG_DIR}/praetorian_<date>.log (last ${LOG_RETENTION} kept)
+Quarantine : ${QUARANTINE_FILE} (expires after ${QUARANTINE_DAYS} d)
+EOF
+}
+
+# ----------------------------------------------------------------------------
+# Argument parsing
+# ----------------------------------------------------------------------------
+# Formula/port names: safe characters only (they end up in grep/awk
+# patterns and in commands run under sudo). "/" only on the formula side,
+# for tap formulae (hashicorp/tap/terraform).
+valid_migrate_spec() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9@._+/-]*(=[A-Za-z0-9][A-Za-z0-9@._+-]*)?$ ]] &&
+        [[ "$1" != *..* && "$1" != */=* && "${1%%=*}" != */ ]]
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) DRY_RUN=true ;;
+            --no-greedy) GREEDY=false ;;
+            --retry-quarantined) RETRY_QUARANTINED=true ;;
+            --unattended) UNATTENDED=true ;;
+            --quiet) QUIET=true ;;
+            --migration-report) MODE=report ;;
+            --migrate | --migrate=*)
+                if [[ "$1" == --migrate=* ]]; then
+                    MIGRATE_SPEC=${1#--migrate=}
+                else
+                    MIGRATE_SPEC=${2:-}
+                    [[ $# -gt 1 ]] && shift
+                fi
+                if ! valid_migrate_spec "${MIGRATE_SPEC}"; then
+                    err "--migrate expects a formula name, optionally followed by =<port>."
+                    err "Examples: --migrate wget    --migrate python@3.12=python312"
+                    finish 1
+                fi
+                MODE=migrate
+                ;;
+            --help | -h)
+                usage
+                finish 0
+                ;;
+            *)
+                err "Unknown option: $1"
+                usage
+                finish 1
+                ;;
+        esac
+        shift
+    done
+}
+
+# ----------------------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------------------
+main() {
+    parse_args "$@"
+
+    # fd 3 = original stdin: commands started in the background by
+    # run_step would otherwise get /dev/null (no sudo password).
+    exec 3<&0
+
+    # Keeps the Mac awake for the whole session (long builds on Intel;
+    # sleep used to cut the network in the middle of the night).
+    if [[ -z "${PRAETORIAN_CAFFEINATED:-}" && "${DRY_RUN}" != true && "${MODE}" != report ]] &&
+        command -v caffeinate >/dev/null 2>&1; then
+        export PRAETORIAN_CAFFEINATED=1
+        exec caffeinate -i "$0" "$@"
+    fi
+
+    # No terminal (launchd, cron, pipe): nobody to type a password, switch
+    # to unattended rather than hang.
+    [[ -t 0 ]] || UNATTENDED=true
+    if [[ "${UNATTENDED}" == true ]]; then
+        # Homebrew then calls "sudo -A": refused right away, no waiting.
+        export SUDO_ASKPASS=/usr/bin/false
+        # MacPorts: "sudo -n" fails right away instead of waiting.
+        SUDO_CMD=(sudo -n)
+    fi
+
+    check_prerequisites
+
+    if [[ "${MODE}" == report ]]; then
+        migration_report
+        ((${#BLOCKERS[@]} == 0)) || finish 1
+        finish 0
+    fi
+
+    [[ "${DRY_RUN}" == true ]] || check_xcode_ready
+    check_disk_space
+    acquire_lock
+    quarantine_prune
+
+    say "${C_BOLD}praetorian ${PRAETORIAN_VERSION}${C_RESET} — $(date '+%Y-%m-%d %H:%M')"
+    [[ "${DRY_RUN}" == true ]] && warn "Dry-run mode: no change will be applied."
+    platform_notes
+
+    if [[ "${MODE}" == migrate ]]; then
+        migrate
+    else
+        if [[ "${HAS_BREW}" == true ]]; then
+            maintenance_brew
+        else
+            info "Homebrew not found: Homebrew part skipped."
+        fi
+        if [[ "${HAS_PORT}" == true ]]; then
+            maintenance_macports
+        fi
+        coexistence
+        diagnostics
+        find_unused_apps
+    fi
+    rotate_logs
+
+    # summary returns 2 when something failed; pass the code on.
+    local final_rc=0
+    summary || final_rc=$?
+    finish "${final_rc}"
+}
+
+# Run main only when executed, not when sourced (the unit tests source
+# this file to call single functions).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
