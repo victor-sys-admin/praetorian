@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 victor-sys-admin
+#
+# ci/check — quality and security checks for praetorian.
+#
+# Every tool runs in a throwaway container pinned by digest: the same
+# script runs locally (podman or docker) and in GitHub Actions, so same
+# tools, same versions, same results.
+#
+# Usage: ci/check [lint|format|secrets|workflows|tests ...]  (default: all)
+#        ci/check fix-format   reformats the scripts with shfmt
+#
+# Engine: docker or podman (detected), can be forced with CONTAINER_ENGINE.
+#
+# Exit codes: 0 everything passes, 1 at least one blocking check failed.
+#
+set -uo pipefail
+
+# To update: change the tag AND the digest (ci/check prints the versions).
+readonly IMG_SHELLCHECK="docker.io/koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d"
+readonly IMG_SHFMT="docker.io/mvdan/shfmt:v3.14.1@sha256:8c06884a35683d8763fba6c0d9484d11a61a96da65f8d497d6f625825a6043f2"
+readonly IMG_GITLEAKS="docker.io/zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
+readonly IMG_ACTIONLINT="docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
+readonly IMG_ZIZMOR="ghcr.io/zizmorcore/zizmor:1.31.0@sha256:5a91180aefd2c72e585a155ee15938ecc2911b64e7fade998bf79fbd16a07856"
+readonly IMG_BATS="docker.io/bats/bats:1.14.0@sha256:5322b877351fda0cc435de8c6116de7d0a2ec79d7c680132a0ef329a633bc66f"
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+readonly ROOT
+readonly SCRIPTS=(praetorian lib/ui.sh lib/session.sh lib/quarantine.sh lib/brew.sh
+    lib/macports.sh lib/migrate.sh lib/report.sh praetorian-sudo-setup ci/check ci/macos-tests
+    tests/praetorian.bats tests/stubs/brew tests/stubs/port tests/stubs/sudo
+    tests/stubs/mktemp tests/stubs/id tests/stubs/bioutil tests/stubs/chown tests/stubs/osascript
+    tests/stubs/xcodebuild tests/stubs/xcode-select)
+
+ENGINE=${CONTAINER_ENGINE:-}
+if [[ -z "${ENGINE}" ]]; then
+    for e in docker podman; do
+        command -v "${e}" >/dev/null 2>&1 && ENGINE=${e} && break
+    done
+fi
+if [[ -z "${ENGINE}" ]]; then
+    echo "ci/check: neither docker nor podman found." >&2
+    exit 1
+fi
+
+if [[ -t 1 ]]; then
+    readonly C_RESET=$'\033[0m' C_BOLD=$'\033[1m' C_RED=$'\033[31m' C_GREEN=$'\033[32m' C_YELLOW=$'\033[33m'
+else
+    readonly C_RESET="" C_BOLD="" C_RED="" C_GREEN="" C_YELLOW=""
+fi
+
+declare -a FAILED=()
+
+# box image [engine options...] -- args...
+# Repository mounted read-only, no network: the tool only sees the code.
+box() {
+    local image=$1
+    shift
+    local -a opts=()
+    while [[ $# -gt 0 && "$1" != "--" ]]; do
+        opts+=("$1")
+        shift
+    done
+    shift
+    "${ENGINE}" run --rm --network=none -v "${ROOT}:/src:ro" -w /src \
+        "${opts[@]+"${opts[@]}"}" "${image}" "$@"
+}
+
+# check name blocking(true|false) command...
+check() {
+    local name=$1 blocking=$2
+    shift 2
+    printf '\n%s── %s%s\n' "${C_BOLD}" "${name}" "${C_RESET}"
+    if "$@"; then
+        printf '%s✓ %s%s\n' "${C_GREEN}" "${name}" "${C_RESET}"
+    elif [[ "${blocking}" == true ]]; then
+        printf '%s✗ %s%s\n' "${C_RED}" "${name}" "${C_RESET}"
+        FAILED+=("${name}")
+    else
+        printf '%s! %s (non-blocking)%s\n' "${C_YELLOW}" "${name}" "${C_RESET}"
+    fi
+}
+
+run_lint() {
+    check "ShellCheck" true box "${IMG_SHELLCHECK}" -- \
+        --shell=bash --severity=style --external-sources "${SCRIPTS[@]}"
+}
+
+# Blocking: the scripts follow shfmt's style. "ci/check fix-format"
+# applies it when this check fails.
+run_format() {
+    check "Formatting (shfmt)" true box "${IMG_SHFMT}" -- \
+        -d -i 4 -ci "${SCRIPTS[@]}"
+}
+
+run_secrets() {
+    check "Secrets (Gitleaks)" true box "${IMG_GITLEAKS}" -- \
+        dir --no-banner --redact --config .gitleaks.toml .
+}
+
+run_workflows() {
+    check "Workflows (actionlint)" true box "${IMG_ACTIONLINT}" -- -color
+    check "Workflows (zizmor)" true box "${IMG_ZIZMOR}" -- \
+        --offline --no-progress .github/workflows/
+}
+
+# Same user as the one running ci/check, not root: praetorian refuses to
+# run as root, and only loads lib/ files owned by the user (or root).
+run_tests() {
+    check "Tests (bats)" true box "${IMG_BATS}" --user "$(id -u):$(id -g)" -e HOME=/tmp -- \
+        --print-output-on-failure tests/
+}
+
+fix_format() {
+    "${ENGINE}" run --rm --network=none -v "${ROOT}:/src" -w /src \
+        "${IMG_SHFMT}" -w -i 4 -ci "${SCRIPTS[@]}"
+}
+
+main() {
+    local -a targets=("$@")
+    ((${#targets[@]} > 0)) || targets=(lint format secrets workflows tests)
+    printf 'Container engine: %s\n' "$("${ENGINE}" --version)"
+
+    local t
+    for t in "${targets[@]}"; do
+        case "${t}" in
+            lint | format | secrets | workflows | tests) "run_${t}" ;;
+            fix-format)
+                fix_format
+                return
+                ;;
+            *)
+                echo "ci/check: unknown target \"${t}\"." >&2
+                return 1
+                ;;
+        esac
+    done
+
+    printf '\n'
+    if ((${#FAILED[@]} > 0)); then
+        printf '%sFailed: %s%s\n' "${C_RED}" "${FAILED[*]}" "${C_RESET}"
+        return 1
+    fi
+    printf '%sAll blocking checks pass.%s\n' "${C_GREEN}" "${C_RESET}"
+}
+
+main "$@"
