@@ -1,6 +1,11 @@
-# praetorian local state (machine-specific, may contain paths)
+# praetorian local state (machine-specific, may contain paths), present
+# when PRAETORIAN_HOME is the repository (the default ~/praetorian).
 logs/
 quarantine.tsv
+migrated.tsv
 .toolchain
 .lock/
-migrated.tsv
+# Lock taken over from a crashed session, while it is being removed
+.lock.stale.*
+# Caskroom/<cask> copy while a half-installed cask is reinstalled
+.cask_backup.*
