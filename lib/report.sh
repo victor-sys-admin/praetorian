@@ -5,7 +5,8 @@
 # praetorian — end-of-session reports
 #
 # brew doctor, unused apps, how to unblock quarantined packages, the
-# summary and the macOS notification.
+# summary and the macOS notification (also sent by on_exit when a session
+# stops before its summary).
 #
 # Sourced by ../praetorian after its safety check (see check_libs); not
 # meant to be run on its own.
@@ -205,26 +206,131 @@ summary() {
 
     say "Session log: ${C_DIM}${LOG_FILE}${C_RESET}"
 
+    local took
+    took=$(format_duration $(($(date +%s) - SESSION_START)))
     if ((STEP_FAIL > 0 || ${#BLOCKERS[@]} > 0)); then
         err "Finished with errors."
-        notify "${STEP_FAIL} failure(s), ${#BLOCKERS[@]} block(s)$( ((${#DEFERRED[@]} > 0)) && echo ", ${#DEFERRED[@]} deferred") — see the log."
+        notify "${STEP_FAIL} failure(s), ${#BLOCKERS[@]} block(s)$( ((${#DEFERRED[@]} > 0)) && echo ", ${#DEFERRED[@]} deferred") — see the log." \
+            "Finished with errors (${took})" failure
         return 2
     fi
     ok "Maintenance completed successfully."
     if ((${#DEFERRED[@]} > 0)); then
-        notify "Done. To do from a terminal (sudo): ${DEFERRED[*]}"
+        notify "Done. To do from a terminal (sudo): ${DEFERRED[*]}" "Done in ${took}, sudo needed" success
     else
-        notify "Maintenance completed successfully."
+        notify "Maintenance completed successfully." "Done in ${took}" success
     fi
     return 0
 }
 
-# macOS notification at the end of the session, unattended mode only.
+# ----------------------------------------------------------------------------
+# macOS notification at the end of the session
+#
+# When (--notify / --no-notify override it):
+#   - unattended: always, nobody is watching the terminal;
+#   - from a terminal: only when the session took at least NOTIFY_AFTER
+#     seconds (you went to do something else); a short one doesn't need it;
+#   - never for --dry-run or --migration-report.
+# Sound only when someone is at the Mac: an unattended night run stays
+# silent (the notification waits in the Notification Center).
+# ----------------------------------------------------------------------------
+NOTIFIED=false
+
+# format_duration <seconds>: "42 s", "12 min", "1 h 05 min".
+format_duration() {
+    local s=$1
+    if ((s < 60)); then
+        echo "${s} s"
+    elif ((s < 3600)); then
+        echo "$((s / 60)) min"
+    else
+        printf '%d h %02d min\n' $((s / 3600)) $((s % 3600 / 60))
+    fi
+}
+
+notify_wanted() {
+    case "${NOTIFY}" in
+        always) return 0 ;;
+        never) return 1 ;;
+    esac
+    [[ "${DRY_RUN}" != true && "${MODE}" != report ]] || return 1
+    [[ "${UNATTENDED}" != true ]] || return 0
+    # PRAETORIAN_NOTIFY_AFTER comes from the environment: digits only,
+    # read as decimal, before it goes near (( )) (see check_disk_space).
+    local after=${NOTIFY_AFTER}
+    if [[ "${after}" =~ ^[0-9]+$ ]]; then
+        after=$((10#${after}))
+    else
+        log_if_started "PRAETORIAN_NOTIFY_AFTER is not a whole number of seconds: default 300 used."
+        after=300
+    fi
+    (($(date +%s) - SESSION_START >= after))
+}
+
+# log_detail, but only once the session has its log directory: a session
+# stopped by check_home (unusable PRAETORIAN_HOME) must not create one.
+log_if_started() {
+    [[ ! -d "${LOG_DIR}" ]] || log_detail "$@"
+}
+
+# The alert sound chosen in System Settings > Sound (its name, e.g.
+# "Tink"), so praetorian sounds like the rest of the Mac. Glass when the
+# setting can't be read. A name macOS doesn't know plays its default
+# alert sound, so a stray value is harmless.
+alert_sound() {
+    local path name
+    path=$(defaults read -g com.apple.sound.beep.sound 2>/dev/null || true)
+    name=${path##*/}
+    name=${name%.*}
+    [[ "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._-]*$ ]] || name=Glass
+    echo "${name}"
+}
+
+# notify <message> <subtitle> <success|failure>
 notify() {
-    [[ "${UNATTENDED}" == true && "${DRY_RUN}" != true ]] || return 0
-    # The message goes in as an argument, never inside the AppleScript
-    # source: no quoting to get right, no code injection.
-    osascript -e 'on run argv' \
-        -e 'display notification (item 1 of argv) with title "praetorian"' \
-        -e 'end run' "$1" >/dev/null 2>&1 || true
+    notify_wanted || return 0
+    NOTIFIED=true
+    local -a sound=()
+    [[ "${UNATTENDED}" == true ]] || sound=("$(alert_sound)")
+    log_if_started "NOTIFICATION: $2 — $1"
+    # The texts go in as arguments, never inside the AppleScript source:
+    # no quoting to get right, no code injection. Bounded: a stuck
+    # osascript must not keep the session (and its lock) alive.
+    run_bounded 15 osascript -e 'on run argv' \
+        -e 'if (count of argv) > 2 then' \
+        -e 'display notification (item 1 of argv) with title "praetorian" subtitle (item 2 of argv) sound name (item 3 of argv)' \
+        -e 'else' \
+        -e 'display notification (item 1 of argv) with title "praetorian" subtitle (item 2 of argv)' \
+        -e 'end if' \
+        -e 'end run' "$1" "$2" "${sound[@]+"${sound[@]}"}"
+}
+
+# Session stopped before its summary (block + finish 1, unplanned error):
+# called by on_exit, so a night run that couldn't even start doesn't go
+# unnoticed. Ctrl-C (130) is left out: whoever pressed it is there.
+notify_stopped() {
+    local rc=$1
+    ((rc != 0 && rc != 130)) || return 0
+    [[ "${NOTIFIED}" != true ]] || return 0
+    if ((${#BLOCKERS[@]} > 0)); then
+        notify "Blocked: ${BLOCKERS[${#BLOCKERS[@]} - 1]}. Nothing more was done — see the log." "Stopped" failure
+    else
+        notify "Stopped with code ${rc} — see the log." "Stopped" failure
+    fi
+}
+
+# run_bounded <seconds> cmd…: runs the command, output discarded, and
+# kills it if it's still running after <seconds>. Always returns 0.
+run_bounded() {
+    local limit=$1 pid i
+    shift
+    "$@" >/dev/null 2>&1 &
+    pid=$!
+    for ((i = 0; i < limit * 5; i++)); do
+        kill -0 "${pid}" 2>/dev/null || break
+        sleep 0.2
+    done
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+    return 0
 }
