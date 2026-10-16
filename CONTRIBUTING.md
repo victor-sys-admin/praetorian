@@ -15,8 +15,10 @@ ships, and nothing to install. Please keep it that way.
    ```
 
    `ci/check` finds the files to check by glob (`praetorian`,
-   `praetorian-sudo-setup`, `lib/*.sh`, `ci/*`, `tests/*.bats`,
-   `tests/stubs/*`): a new file there is checked without editing it.
+   `praetorian-sudo-setup`, `praetorian-schedule`, `lib/*.sh`, `ci/*`,
+   `tests/*.bats`, `tests/stubs/*`): a new file there is checked without
+   editing it. A new script at the top of the repository has to be added
+   to that list in `ci/check`.
 
 2. On a Mac, also run the tests under macOS's own `/bin/bash` 3.2 and BSD
    tools (fetches bats-core at a pinned commit into a temp directory,
