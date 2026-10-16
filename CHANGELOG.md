@@ -8,7 +8,44 @@ The version printed by `praetorian --help` and the latest version in the
 README (section "Latest release") must match: a test checks it. No git
 tag exists yet for these versions.
 
-## Unreleased
+## 1.4.0 - 2026-10-16
+
+### Added
+
+- `praetorian-schedule`: runs praetorian overnight with a per-user
+  `launchd` job (`install [--at HH:MM] [--weekday DAY] [--dry-run]`,
+  `uninstall`, `status`), as `praetorian --unattended --ac-power-only`,
+  with no sudo and no stored password. Refuses to install when
+  `praetorian` or its directory could be changed by another user, or when
+  the repository or `PRAETORIAN_HOME` is in a folder macOS keeps from
+  background jobs (`~/Documents`, `~/Desktop`, `~/Downloads`, iCloud
+  Drive, `/Volumes`). The plist is checked with `plutil -lint` before it's
+  loaded, and a previous job is put back if loading the new one fails.
+  `status` exits 0 (installed and loaded), 1 (something to fix) or 3 (not
+  installed).
+- `--ac-power-only`: blocks the session (exit code 1) when the Mac is on
+  battery or UPS power; skipped with a warning when the power source can't
+  be read.
+- `--notify` and `--no-notify`: always or never send the end-of-session
+  notification. `PRAETORIAN_NOTIFY_AFTER` (seconds, default 300).
+- Tests: `tests/notify.bats`, `tests/schedule.bats`; fakes `launchctl`,
+  `plutil` (the real one on macOS) and `pmset`.
+
+### Changed
+
+- The end-of-session notification is also sent from a terminal when the
+  session took 5 minutes or more, with a sound (none when unattended). It
+  now has a subtitle with the outcome and the duration.
+- A session that stops before its summary (a block such as the lock, the
+  disk, the battery or Xcode, or an unexpected error) now sends a
+  "Stopped" notification naming the block. Not after Ctrl-C.
+- `osascript` runs with a 15-second limit, so a stuck notification can't
+  keep the session and its lock alive.
+- `ci/check` also lints and formats `praetorian-schedule`.
+- `tests/interactive.bats`: its `[[ ]]` assertions end with `|| false`.
+  That file only runs under macOS's bash 3.2, where a failing `[[ ]]` that
+  isn't a test's last command didn't fail the test, so those assertions
+  checked nothing. They all hold.
 
 ## 1.3.0 - 2026-10-15
 

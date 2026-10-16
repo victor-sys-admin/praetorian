@@ -30,6 +30,10 @@ In scope:
 - `praetorian-sudo-setup`: anything that writes outside
   `/etc/pam.d/sudo_local` (and its backups), or weakens sudo beyond adding
   `pam_tid`.
+- `praetorian-schedule`: anything that writes outside
+  `~/Library/LaunchAgents/io.github.victor-sys-admin.praetorian.plist`
+  (and its temporary file) and `PRAETORIAN_HOME/logs`, or a job that runs
+  something other than `praetorian`, or as someone else than you.
 - `ci/` and `.github/workflows/`: a way to get secrets or write access from
   the CI.
 
@@ -57,13 +61,17 @@ Out of scope:
   password; unattended, those commands are deferred instead.
   `praetorian-sudo-setup` only adds `auth sufficient pam_tid.so` to
   `/etc/pam.d/sudo_local`, which keeps physical presence as the factor.
+- **The scheduled job** (`praetorian-schedule`) is a per-user LaunchAgent:
+  it runs as you, never as root, with no password. Before installing it,
+  `praetorian-schedule` refuses a `praetorian` (or its directory) that
+  another user could change, since `launchd` runs that path every night.
 - **What runs as root.** Only MacPorts commands (at the absolute path
   `/opt/local/bin/port`, after checking that it and every directory above
   it belong to root and are writable by root only) and the installers
   Homebrew runs for some casks. Package names passed to `--migrate` are
   restricted to safe characters.
 - **Nothing is stored beyond local state.** praetorian sends nothing
-  anywhere. Its state (`PRAETORIAN_HOME`: logs, quarantine, lock) stays on
+  anywhere (the end-of-session notification is a local macOS one). Its state (`PRAETORIAN_HOME`: logs, quarantine, lock) stays on
   the Mac; `logs/` is `700` because it holds the full brew and port output.
 
 The README section

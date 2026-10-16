@@ -6,7 +6,7 @@
 #
 # Exits and Ctrl-C, run_step (runs a command with its output in the log),
 # output analysis, prerequisites (root, package managers, Xcode, disk,
-# lock), sudo policy, platform notes and log rotation.
+# power source, lock), sudo policy, platform notes and log rotation.
 #
 # Sourced by ../praetorian after its safety check (see check_libs); not
 # meant to be run on its own.
@@ -82,6 +82,12 @@ on_exit() {
     # Only our own lock: never one another session took over meanwhile.
     if [[ "${LOCK_HELD}" == true && "$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)" == "$$" ]]; then
         rm -rf "${LOCK_DIR}"
+    fi
+    # Stopped before the summary: notify (unattended), once the lock is
+    # released. notify_stopped lives in lib/report.sh, loaded after this
+    # file.
+    if declare -F notify_stopped >/dev/null; then
+        notify_stopped "${rc}" || true
     fi
     return 0
 }
@@ -412,6 +418,39 @@ check_disk_space() {
     elif ((gb < WARN_FREE_GB)); then
         warn "Only ${gb} GB free: a big build could fill the disk."
     fi
+}
+
+# --ac-power-only (set by praetorian-schedule): on battery, a session that
+# compiles for hours would drain it, and the Mac could sleep or shut down
+# mid-build (half-installed packages). Unknown power source (no pmset,
+# unexpected output): not blocking, the check is skipped with a warning.
+check_ac_power() {
+    [[ "${AC_POWER_ONLY}" == true ]] || return 0
+    local source
+    if ! command -v pmset >/dev/null 2>&1; then
+        warn "pmset not found: power source unknown, --ac-power-only check skipped."
+        return 0
+    fi
+    source=$(pmset -g batt 2>/dev/null | sed -nE "s/^Now drawing from '([^']+)'.*/\1/p" | head -n 1 || true)
+    log_detail "Power source: ${source:-unknown}"
+    case "${source}" in
+        "AC Power") return 0 ;;
+        "Battery Power" | "UPS Power") ;;
+        *)
+            warn "Power source unknown (pmset -g batt): --ac-power-only check skipped."
+            return 0
+            ;;
+    esac
+    if [[ "${DRY_RUN}" == true ]]; then
+        warn "On ${source}: a real session with --ac-power-only would be blocked."
+        return 0
+    fi
+    block "the Mac is on ${source} (--ac-power-only)" \
+        "Homebrew on an Intel Mac compiles from source: a session can take hours. On ${source} it would drain it, and the Mac could sleep or shut down in the middle of a build, leaving half-installed packages." \
+        "Nothing was done this session." \
+        "Plug the Mac in: the next scheduled run goes ahead." \
+        "Or run it now from a terminal, plugged in: ${PRAETORIAN_ROOT}/praetorian"
+    finish 1
 }
 
 # One session at a time. The lock is a directory (mkdir is atomic)

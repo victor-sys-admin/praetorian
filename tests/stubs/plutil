@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# plutil for the tests: the real one when there is one (macOS: the
+# generated plist is really checked), otherwise (Linux) a minimal
+# "plutil -lint": XML header, plist root closed, balanced dict/array.
+# PLUTIL_LINT_RC forces a failing lint.
+#
+stubs=$(cd "$(dirname "$0")" && pwd)
+if [[ -n "${PLUTIL_LINT_RC:-}" ]]; then
+    echo "${!#}: fake lint failure"
+    exit "${PLUTIL_LINT_RC}"
+fi
+PATH=${PATH//"${stubs}:"/}
+if command -v plutil >/dev/null 2>&1; then
+    exec plutil "$@"
+fi
+[[ "${1:-}" == -lint && -f "${2:-}" ]] || exit 1
+file=$2
+head -n 1 "${file}" | grep -q '^<?xml version="1.0" encoding="UTF-8"?>$' || exit 1
+tail -n 1 "${file}" | grep -qx '</plist>' || exit 1
+[[ "$(grep -c '<dict>' "${file}")" -eq "$(grep -c '</dict>' "${file}")" ]] || exit 1
+[[ "$(grep -c '<array>' "${file}")" -eq "$(grep -c '</array>' "${file}")" ]] || exit 1
+echo "${file}: OK"

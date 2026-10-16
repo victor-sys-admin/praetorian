@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# Fake launchctl for the praetorian-schedule tests: records every call in
+# $LAUNCHCTL_CALLS, never touches the real launchd. Loaded state kept in
+# $LAUNCHCTL_CALLS.loaded (the bootstrapped plist's path).
+#
+#   LAUNCHCTL_BOOTSTRAP_RC   bootstrap fails with this code (default 0)
+#   LAUNCHCTL_BOOTOUT_RC     bootout fails with this code (default 0)
+#   LAUNCHCTL_DISABLED       non-empty: the job shows as disabled
+#                            (print-disabled), until "enable"
+#   LAUNCHCTL_LAST_EXIT      "last exit code" in print (default 0)
+#
+set -u
+printf '%s\n' "$*" >>"${LAUNCHCTL_CALLS:?}"
+loaded="${LAUNCHCTL_CALLS}.loaded"
+enabled="${LAUNCHCTL_CALLS}.enabled"
+
+case "${1:-}" in
+    bootstrap)
+        rc=${LAUNCHCTL_BOOTSTRAP_RC:-0}
+        if ((rc != 0)); then
+            echo "Bootstrap failed: ${rc}: Input/output error" >&2
+            exit "${rc}"
+        fi
+        printf '%s\n' "$3" >"${loaded}"
+        ;;
+    bootout)
+        rc=${LAUNCHCTL_BOOTOUT_RC:-0}
+        if ((rc != 0)); then
+            echo "Boot-out failed: ${rc}: Operation not permitted" >&2
+            exit "${rc}"
+        fi
+        if [[ ! -e "${loaded}" ]]; then
+            echo "Boot-out failed: 3: No such process" >&2
+            exit 3
+        fi
+        rm -f "${loaded}"
+        ;;
+    print)
+        if [[ ! -e "${loaded}" ]]; then
+            echo "Could not find service \"${2##*/}\" in domain for user gui: ${2#gui/}" >&2
+            exit 113
+        fi
+        echo "${2} = {"
+        echo "	active count = 0"
+        echo "	path = $(cat "${loaded}")"
+        echo "	state = not running"
+        echo "	last exit code = ${LAUNCHCTL_LAST_EXIT:-0}"
+        echo "}"
+        ;;
+    print-disabled)
+        echo "disabled services = {"
+        if [[ -n "${LAUNCHCTL_DISABLED:-}" && ! -e "${enabled}" ]]; then
+            echo "	\"io.github.victor-sys-admin.praetorian\" => disabled"
+        fi
+        echo "	\"com.example.other\" => disabled"
+        echo "}"
+        ;;
+    enable) touch "${enabled}" ;;
+esac
+exit 0
