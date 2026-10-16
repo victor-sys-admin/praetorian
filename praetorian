@@ -25,7 +25,8 @@
 # What changed in each version: CHANGELOG.md.
 #
 # Usage   : ./praetorian [--dry-run] [--no-greedy] [--retry-quarantined]
-#                        [--unattended] [--quiet] [--help]
+#                        [--unattended] [--notify | --no-notify]
+#                        [--ac-power-only] [--quiet] [--help]
 #           ./praetorian --migration-report
 #           ./praetorian [--dry-run] --migrate <formula>[=<port>]
 #           (--migrate=<formula>[=<port>] works too; -h = --help)
@@ -35,7 +36,8 @@
 # Exit codes:
 #   0   full success
 #   1   prerequisite error (no package manager, root, Xcode not ready,
-#       disk full, another session running, invalid PRAETORIAN_HOME) or
+#       disk full, on battery with --ac-power-only, another session
+#       running, invalid PRAETORIAN_HOME) or
 #       migration report blocked
 #   2   one or more steps failed or were blocked
 #   130 interrupted (Ctrl-C)
@@ -89,6 +91,13 @@ readonly SHELL_RC_FILES=(.zshenv .zprofile .zshrc .zlogin .bash_profile .bashrc 
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
 readonly RUN_TS
 readonly LOG_FILE="${LOG_DIR}/praetorian_${RUN_TS}.log"
+# Session start (epoch), for its duration in the summary and the
+# notification.
+SESSION_START=$(date +%s)
+readonly SESSION_START
+# From a terminal, a notification only after a session this long
+# (seconds). PRAETORIAN_NOTIFY_AFTER: checked by notify_wanted.
+readonly NOTIFY_AFTER="${PRAETORIAN_NOTIFY_AFTER:-300}"
 
 # Options (changed by flags)
 MODE=maintain   # maintain | report (--migration-report) | migrate
@@ -98,6 +107,8 @@ GREEDY=true
 QUIET=false
 RETRY_QUARANTINED=false
 UNATTENDED=false           # --unattended, or automatic without a terminal
+NOTIFY=auto                # auto | always (--notify) | never (--no-notify)
+AC_POWER_ONLY=false        # --ac-power-only: blocked on battery
 SHOW_PROGRESS=true         # progress line (off during casks)
 declare -a DEFERRED=()     # deferred for lack of sudo (unattended mode)
 declare -a SUDO_CMD=(sudo) # "sudo -n" when unattended: never waits
@@ -278,6 +289,14 @@ Options:
                 summarizes the session. Automatic when praetorian isn't
                 started from a terminal.
                 No password is ever stored (CIS / PCI DSS).
+  --notify      Always sends the end-of-session notification, even for a
+                short session or a dry-run (handy to check that macOS lets
+                it through). By default: unattended, or after a session of
+                5 minutes or more.
+  --no-notify   Never sends it.
+  --ac-power-only
+                Blocks the session when the Mac runs on battery (used by
+                praetorian-schedule: hours of builds would drain it).
   --quiet       Minimal screen output (everything stays in the log; blocks
                 are always shown).
   --help, -h    Shows this help.
@@ -317,6 +336,9 @@ parse_args() {
             --no-greedy) GREEDY=false ;;
             --retry-quarantined) RETRY_QUARANTINED=true ;;
             --unattended) UNATTENDED=true ;;
+            --notify) NOTIFY=always ;;
+            --no-notify) NOTIFY=never ;;
+            --ac-power-only) AC_POWER_ONLY=true ;;
             --quiet) QUIET=true ;;
             --migration-report) MODE=report ;;
             --migrate | --migrate=*)
@@ -384,6 +406,7 @@ main() {
     fi
 
     [[ "${DRY_RUN}" == true ]] || check_xcode_ready
+    check_ac_power
     check_disk_space
     acquire_lock
     quarantine_prune
