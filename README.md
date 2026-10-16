@@ -23,6 +23,7 @@ Session lock hardened, way back for half-installed casks, stricter root checks b
 - [Installation](#installation)
 - [Requirements](#requirements)
 - [Options](#options)
+- [Scheduling: overnight runs](#scheduling-overnight-runs)
 - [Package strategy: Homebrew → MacPorts](#package-strategy-homebrew--macports)
 - [When praetorian blocks](#when-praetorian-blocks)
 - [Troubleshooting](#troubleshooting)
@@ -56,6 +57,10 @@ sudo ~/praetorian/praetorian-sudo-setup
 
 # Run with nobody watching (overnight, launchd…)
 ~/praetorian/praetorian --unattended
+
+# Run it every night at 03:30 (launchd, as you, no password), check on it
+~/praetorian/praetorian-schedule install
+~/praetorian/praetorian-schedule status
 
 # Homebrew → MacPorts: see the plan (read-only), then move one formula
 ~/praetorian/praetorian --migration-report
@@ -125,7 +130,9 @@ MacPorts also needs Xcode or at least the Command Line Tools, even though it mos
 | `git` | Detecting Homebrew's development branch (`git -C $(brew --repository) branch`). Comes with Xcode or the Command Line Tools |
 | `sudo` | MacPorts commands and cask installers. Never cached or stored (see [Security](#security-how-sudo-is-handled)) |
 | `mdls` (Spotlight) | Last-used date of apps in `/Applications` |
-| `osascript` | End-of-session notification in unattended mode |
+| `osascript` | End-of-session notification (unattended, sessions of 5 minutes or more, `--notify`) |
+| `pmset` | Power source check (`--ac-power-only`) |
+| `launchctl`, `plutil` | `praetorian-schedule`: loading the job, checking its plist |
 
 The disk needs at least 5 GB free (20 GB recommended); below that, praetorian stops before doing anything. praetorian refuses to run as root: Homebrew refuses it too, and praetorian asks for sudo itself, one command at a time.
 
@@ -133,13 +140,17 @@ The disk needs at least 5 GB free (20 GB recommended); below that, praetorian st
 
 `praetorian-sudo-setup` (run once with sudo) uses `bioutil` to check that a fingerprint is enrolled, and `cp`, `sed`, `awk`, `chmod` and `chown` to write `/etc/pam.d/sudo_local`. It needs a Mac with Touch ID; without one, sudo simply asks for the password.
 
+### Optional: overnight runs
+
+`praetorian-schedule` installs a per-user `launchd` job; it needs nothing beyond macOS (`launchctl`, `plutil`) and no sudo. See [Scheduling](#scheduling-overnight-runs).
+
 ### For development only: checks and tests
 
 `ci/check` runs every check in throwaway containers pinned by digest, so the only local requirement is **Podman or Docker** (`CONTAINER_ENGINE` picks one). Nothing below is installed on the Mac:
 
 | Container | Check |
 |---|---|
-| ShellCheck 0.11.0 | Lint, `--severity=style` (blocking). ShellCheck and shfmt check every file matched by `praetorian`, `praetorian-sudo-setup`, `lib/*.sh`, `ci/*`, `tests/*.bats` and `tests/stubs/*` |
+| ShellCheck 0.11.0 | Lint, `--severity=style` (blocking). ShellCheck and shfmt check every file matched by `praetorian`, `praetorian-sudo-setup`, `praetorian-schedule`, `lib/*.sh`, `ci/*`, `tests/*.bats` and `tests/stubs/*` |
 | shfmt 3.14.1 | Formatting (blocking; `ci/check fix-format` fixes it) |
 | Gitleaks 8.30.1 | Secrets (blocking). Scans the working tree, archives included (`--max-archive-depth 2`): with the default `PRAETORIAN_HOME`, that covers your local `logs/` and their `.tar.gz` build logs. A `PRAETORIAN_HOME` outside the repository isn't scanned |
 | actionlint 1.7.12, zizmor 1.31.0 | GitHub workflows (blocking) |
@@ -155,12 +166,63 @@ The same tests also run **on macOS under `/bin/bash` 3.2** with `ci/macos-tests`
 | `--no-greedy` | Upgrades casks without `--greedy`, so apps that update themselves are left alone. |
 | `--retry-quarantined` | Ignores the quarantine for this run and retries everything. |
 | `--unattended` | Never waits for input. Whatever needs sudo (casks with an installer, the whole MacPorts part) is deferred, not failed, and a macOS notification summarizes the run. This mode turns on automatically when stdin is not a terminal. |
+| `--notify` | Always sends the end-of-session notification, even for a short session or a `--dry-run`. `praetorian --dry-run --notify` is a quick way to check that macOS lets it through. |
+| `--no-notify` | Never sends it, not even unattended. |
+| `--ac-power-only` | Stops before doing anything (exit code 1, with a block and a notification) when the Mac is on battery or UPS power. Used by the scheduled job: a session can compile for hours. If the power source can't be read, the check is skipped with a warning. With `--dry-run`, only a warning. |
 | `--quiet` | Minimal terminal output. Everything still goes to the log. Blocks are always shown. |
 | `--migration-report` | Read-only plan: for each formula you installed yourself, the matching MacPorts port and anything that would block its migration. Changes nothing. |
 | `--migrate <formula>[=<port>]`<br>`--migrate=<formula>[=<port>]` | Moves **one** formula to MacPorts: checks, installs the port, checks again, and only then uninstalls the formula. Example: `--migrate python@3.12=python312`. Without `=<port>`, the port has the formula's name (without its tap: `hashicorp/tap/terraform` → `terraform`). Combine with `--dry-run` to run only the checks. Names are restricted to letters, digits and `@._+-` (plus `/` for a tap formula), because they end up in commands run under sudo. |
 | `--help`, `-h` | Usage. |
 
-**Exit codes:** `0` = success, `1` = prerequisite problem (no package manager, run as root, Xcode not ready, disk almost full, another session running, invalid `PRAETORIAN_HOME`, untrusted `lib/`) or migration report blocked, `2` = at least one step failed or was blocked, `130` = interrupted.
+**Notification.** At the end of a session, a macOS notification gives the outcome, the duration and what is left to do (casks deferred for sudo, failures). It's sent when you're probably not watching: always when unattended, and from a terminal only when the session took 5 minutes or more (`PRAETORIAN_NOTIFY_AFTER`). From a terminal it plays your alert sound (System Settings > Sound > Alert sound; Glass if that setting can't be read); unattended it's silent, so a night run doesn't wake anybody, and it waits in the Notification Center. A session that stops before its summary (blocked by the lock, the disk, the battery, Xcode, or an unexpected error) also sends one, naming the block; Ctrl-C doesn't. Never for `--dry-run` (unless `--notify`) or `--migration-report`.
+
+**Exit codes:** `0` = success, `1` = prerequisite problem (no package manager, run as root, Xcode not ready, disk almost full, on battery with `--ac-power-only`, another session running, invalid `PRAETORIAN_HOME`, untrusted `lib/`) or migration report blocked, `2` = at least one step failed or was blocked, `130` = interrupted.
+
+## Scheduling: overnight runs
+
+On an Intel Mac, every Homebrew upgrade compiles: running praetorian at night makes that painless. `praetorian-schedule` sets it up with `launchd`, as you, with no password:
+
+```sh
+~/praetorian/praetorian-schedule install                          # every day at 03:30
+~/praetorian/praetorian-schedule install --at 23:15 --weekday sun # once a week instead
+~/praetorian/praetorian-schedule install --dry-run                # show the job, install nothing
+~/praetorian/praetorian-schedule status                           # schedule, last run, what to fix
+~/praetorian/praetorian-schedule uninstall                        # remove it (logs and quarantine kept)
+```
+
+The job runs `praetorian --unattended --ac-power-only`: casks that need sudo and the whole MacPorts part are deferred to your next session from a terminal (no password is stored, see [Security](#security-how-sudo-is-handled)); on battery it stops before doing anything; the notification sums up the night in the Notification Center. `install` again replaces the job (new time, or after moving the repository). The default time, 03:30, is after the 02:00–03:00 window where daylight saving time changes in Europe and North America.
+
+**Mac asleep, Mac off.** A Mac asleep at that time runs the job as soon as it wakes up (several missed nights count as one run): if you close the lid at night, the session starts when you open it in the morning, at a lower priority (`Nice 10`) so the Mac stays usable. A Mac that is shut down doesn't run it. To have the Mac wake up (or power on) just before, which needs admin rights and that `praetorian-schedule` doesn't do for you:
+
+```sh
+sudo pmset repeat wakeorpoweron MTWRFSU 03:25:00   # every day, 5 minutes before the job
+pmset -g sched                                      # check
+sudo pmset repeat cancel                            # undo
+```
+
+**Status and exit codes.** `install` and `uninstall` return `0` when done, `1` on error. `status` returns `0` when the job is installed and loaded, `1` when something needs fixing (not loaded, turned off in Login Items, `praetorian` no longer where the job points), `3` when it isn't installed. It also shows the last run's exit code (see [Options](#options)) and the latest session log.
+
+**What the job looks like** (`~/Library/LaunchAgents/io.github.victor-sys-admin.praetorian.plist`, see `install --dry-run`):
+
+| Key | Value | Why |
+|---|---|---|
+| `ProgramArguments` | the real path of `praetorian` (links resolved), `--unattended`, `--ac-power-only` | No shell in between: nothing is parsed or expanded |
+| `StartCalendarInterval` | `Hour`, `Minute` (`Weekday` with `--weekday`) | Missed runs happen at wake-up, unlike cron |
+| `EnvironmentVariables` | `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `PRAETORIAN_HOME` | macOS's own `/bin/bash` 3.2 and tools; praetorian finds `brew` at its standard locations |
+| `ProcessType`, `Nice` | `Standard`, `10` | Full speed on an idle Mac, gives way when you use it. `Background` would throttle CPU, disk and network even on an idle Mac, and builds would take far longer |
+| `LimitLoadToSessionType` | `Aqua` | Only in your graphical session, where the notification can be shown |
+| `RunAtLoad` | `false` | Logging in doesn't start a session |
+| `StandardOutPath`, `StandardErrorPath` | `/dev/null`, `PRAETORIAN_HOME/logs/launchd.stderr.log` | Everything is in the session log; stderr keeps what happens before that log exists |
+
+**Checks before anything is installed** (each refusal says why and what to do; nothing is written or loaded):
+
+- not as root (the job would land in root's agents, and Homebrew refuses root), and only where `launchctl` exists (macOS);
+- `praetorian` sits next to `praetorian-schedule`, is executable, and it and its directory belong to you (or root) and aren't writable by group or others: `launchd` runs that path every night, so a file someone else could change would be a way in (the same rule praetorian applies to `lib/` when it starts);
+- neither the repository nor `PRAETORIAN_HOME` is in `~/Desktop`, `~/Documents`, `~/Downloads`, iCloud Drive or `/Volumes`: macOS keeps background jobs out of those folders, and the job would fail every night with "Operation not permitted" (`praetorian-schedule` never asks for Full Disk Access);
+- `PRAETORIAN_HOME` (from the environment, `~/praetorian` by default) is an absolute path on one line; it's written into the job, XML-escaped;
+- the plist is written to a temporary file next to its final place (`644`), checked with `plutil -lint`, and only then moved into place and loaded. The previous job, if any, is kept until the new one is loaded: if `launchctl bootstrap` fails, it's put back.
+
+macOS shows "Background Items Added" the first time: that's this job, listed in System Settings > General > Login Items. If you turn it off there, `status` says so, and `install` turns it back on (you asked for it).
 
 ## Package strategy: Homebrew → MacPorts
 
@@ -305,6 +367,31 @@ praetorian found a `lib/` file it won't load, and names it with the reason. The 
 - **a symbolic link**: replace it with the real file from the repository.
 - **another owner**: after checking the content, `chown $(id -un) <repo>/lib <repo>/lib/*.sh`.
 
+### No notification shows up
+
+First check that praetorian sent it: the session log has a `NOTIFICATION:` line when it did. From a terminal, a session shorter than 5 minutes doesn't notify on purpose (`PRAETORIAN_NOTIFY_AFTER`, or `--notify` to force it).
+
+If the line is there, macOS filtered it. Notifications sent through `osascript` are shown under **Script Editor**'s name, and Script Editor only appears in System Settings > Notifications once it has shown a notification itself (one sent from a terminal isn't enough). To allow it, once:
+
+1. Open Script Editor (Applications > Utilities, or `open -a "Script Editor"`).
+2. In a new document, run (▶︎):
+   ```applescript
+   display notification "test" with title "praetorian"
+   ```
+3. Click **Allow** when macOS asks. Script Editor is now listed in System Settings > Notifications: pick **Banners** (or **Alerts**, to keep them on screen until dismissed).
+4. Check with `praetorian --dry-run --notify`: it sends one in a few seconds, without changing anything.
+
+Still nothing: look in the same list for your terminal app (Terminal, iTerm, Visual Studio Code…), which macOS may credit instead, and check Focus (Do Not Disturb), which keeps notifications in the Notification Center without a banner.
+
+### The scheduled run didn't happen
+
+Run `praetorian-schedule status`: it says whether the job is loaded, turned off in Login Items, or points at a `praetorian` that moved, and shows the last exit code and session log. Then:
+
+- The Mac was shut down at that time: the job only runs on a Mac that is on (asleep is fine). See [Scheduling](#scheduling-overnight-runs) to wake it up first.
+- "is on Battery Power (--ac-power-only)" in the log or the notification: the Mac wasn't plugged in.
+- Something printed before the session log existed (for example the `lib/` check) is in `PRAETORIAN_HOME/logs/launchd.stderr.log`; `status` shows its last lines.
+- `install` failed with "Input/output error": run `praetorian-schedule uninstall`, then `install` again, from your own session at the Mac (not over SSH).
+
 ### Touch ID doesn't show up for sudo
 
 Over SSH there is no Touch ID: sudo asks for the password. Inside `tmux` (or `screen`), `pam_tid` can't reach the Touch ID sensor on its own either. The fix is [`pam_reattach`](https://github.com/fabianishere/pam_reattach): install it, then put `auth optional /path/to/pam_reattach.so` **before** the `pam_tid.so` line in `/etc/pam.d/sudo_local`. `praetorian-sudo-setup` respects that order: when a `pam_reattach.so` line is already there, it inserts `pam_tid` right after it. Otherwise, run praetorian from a plain terminal window.
@@ -316,7 +403,7 @@ Over SSH there is no Touch ID: sudo asks for the password. Inside `tmux` (or `sc
 ## What a session does
 
 ```
-parse args ─► re-exec under caffeinate ─► prerequisites ─► Xcode ready? ─► disk space ─► lock ─► prune quarantine
+parse args ─► re-exec under caffeinate ─► prerequisites ─► Xcode ready? ─► on AC power? (--ac-power-only) ─► disk space ─► lock ─► prune quarantine
    │
    ▼
 Maintenance Homebrew (skipped if Homebrew is absent)
@@ -344,6 +431,8 @@ Maintenance MacPorts (skipped if MacPorts is absent)
    │
    ▼
 Side by side (both present) ─► Diagnostics (brew doctor) ─► Unused apps (> 6 months) ─► Log rotation (counted only in dry-run) ─► Summary (+ notification)
+
+Stopped before the summary (a block, an unexpected error; not Ctrl-C) ─► notification naming the block
 ```
 
 The summary lists failed steps, blocks, the Homebrew and MacPorts errors pulled from the output, anything newly quarantined, deferred items, and concrete commands to unblock each quarantined package.
@@ -357,6 +446,7 @@ The code lives where you cloned it. The state lives in `PRAETORIAN_HOME` (`~/pra
 | `praetorian` | Entry point: constants, options, code loading, `main` | yes |
 | `lib/*.sh` | The code, by topic (see [Code layout](#code-layout)) | yes |
 | `praetorian-sudo-setup` | One-time Touch ID setup for sudo | yes |
+| `praetorian-schedule` | Installs, removes and checks the overnight `launchd` job | yes |
 | `ci/`, `tests/`, `.github/` | Checks, tests and CI (see [Development](#development)) | yes |
 | *In `PRAETORIAN_HOME`:* | | |
 | `logs/praetorian_<timestamp>.log` | Full session log, including the complete brew output (last 30 kept). `logs/` is made private (`700`): it lists your paths and packages | no |
@@ -367,9 +457,11 @@ The code lives where you cloned it. The state lives in `PRAETORIAN_HOME` (`~/pra
 | `.toolchain` | `xcode` or `clt`: the compiler toolchain seen by the last real (not dry-run) session; written on every one | no |
 | `.lock/` | Present while a session runs; `.lock/pid` holds its PID (written as `.lock/pid.<pid>` then renamed) | no |
 | `.lock.stale.<pid>` | A crashed session's lock, for the moment it is being taken over | no |
+| `logs/launchd.stderr.log` | Written by `launchd` for the scheduled job: what praetorian printed on stderr before its session log existed. Usually empty | no |
 | `.cask_backup.<cask>.<pid>` | Copy of `Caskroom/<cask>` while a half-installed cask is reinstalled; removed afterwards, kept only if it couldn't be put back (the warning gives the command) | no |
 | *Elsewhere:* | | |
 | `$TMPDIR/praetorian.*`, `praetorian_stamp.*`, `praetorian_q.*` | Current step's output, session start stamp, quarantine rewrite. Removed at the end of the session | — |
+| `~/Library/LaunchAgents/io.github.victor-sys-admin.praetorian.plist` | The scheduled job, written by `praetorian-schedule` only (`644`) | — |
 | `/etc/pam.d/sudo_local` | Written by `praetorian-sudo-setup` only (`root:wheel 444`), with `sudo_local.bak.<timestamp>.<pid>` backups next to it | — |
 
 `quarantine.tsv` is tab-separated:
@@ -395,6 +487,7 @@ On exit, praetorian removes `.lock/` only if it still holds its own PID. `--dry-
 | Variable | Effect |
 |---|---|
 | `PRAETORIAN_HOME` | State directory: logs, quarantine, lock, `.toolchain`, `migrated.tsv` (default `~/praetorian`). Must be an absolute path without a newline, otherwise praetorian stops with exit code 1 before writing anything. Set it in the environment that starts praetorian (shell profile, `launchd` job). |
+| `PRAETORIAN_NOTIFY_AFTER` | From a terminal, the notification is sent only when the session took at least this many seconds (default `300`; `0` = always). Digits only: anything else is ignored (default used). Unattended sessions always notify; `--notify` / `--no-notify` override it. |
 | `HOMEBREW_DEVELOPER` | When set, praetorian leaves Homebrew on its development branch instead of switching back to stable ([decision 13](#13-stay-on-homebrews-stable-channel)). |
 | `CONTAINER_ENGINE` | `ci/check` only: `docker` or `podman`, when both are installed. |
 | `PRAETORIAN_PORT_PREFIX` | **Tests only.** MacPorts prefix (default `/opt/local`), so the tests can install a fake `port`. With the default prefix, `port` and every directory above it up to `/` must belong to root and be writable by root only before any `sudo port`, whatever `sudo` comes first in the `PATH`. With another prefix, that check is skipped only when the `sudo` found in the `PATH` isn't a setuid-root file (the tests' fake `sudo`, which can't give root); with a real `sudo`, it applies and blocks. |
@@ -542,6 +635,16 @@ The same rule explains how the code is written: a function whose failure must st
 
 *Why:* until 1.2.0, an `ERR` trap was meant to do this, but bash doesn't run it inside functions (where almost all the code is) unless `errtrace` is on. An unexpected failure ended the session silently. Turning `errtrace` on wasn't an option: it would also fire inside command substitutions that are allowed to fail.
 
+### 21. Notify when nobody is watching
+
+The notification used to be sent in unattended mode only. Now it's also sent from a terminal when the session lasted long enough that you probably went to do something else (5 minutes by default), and when a session stops before its summary: a night run blocked by the lock, the disk or the battery would otherwise leave no trace until you read the logs. `osascript` gets the texts as arguments, never inside the AppleScript source (no quoting, no injection), and runs with a 15-second limit: a stuck `osascript` must not keep the session, and its lock, alive. A sound only when someone is at the Mac.
+
+*Alternative rejected: `terminal-notifier`.* It would show praetorian's own name instead of Script Editor's, but it's one more thing to install, and on an Intel Mac that means building it.
+
+### 22. Schedule with launchd, as you
+
+`praetorian-schedule` installs a user `LaunchAgent`, never a system `LaunchDaemon` (Homebrew refuses root) nor a cron job: `launchd` runs a job the Mac slept through when it wakes up, where cron skips it, and cron needs Full Disk Access on recent macOS, a permission that widens what every cron job can read. No sudo, no stored password: the nightly run defers what needs root. See [Scheduling](#scheduling-overnight-runs) for the job and the checks made before it's installed.
+
 ---
 
 ## Security: how sudo is handled
@@ -587,12 +690,13 @@ Some casks run `.pkg` installers through `sudo`, and MacPorts needs `sudo` for e
 |---|---|
 | `praetorian` | Header, constants, options and global state; `lib/` safety check and loading; `usage`, argument parsing, `main` |
 | `lib/ui.sh` | Colors, session log, `say`/`info`/`ok`/`warn`/`err`/`loud`, `block` |
-| `lib/session.sh` | `finish`, Ctrl-C, `EXIT` handling; `run_step`; output analysis; step counters; Xcode check; sudo policy; prerequisites (managers, disk, lock); platform notes; log rotation |
+| `lib/session.sh` | `finish`, Ctrl-C, `EXIT` handling (with the "Stopped" notification); `run_step`; output analysis; step counters; Xcode check; sudo policy; prerequisites (managers, power source, disk, lock); platform notes; log rotation |
 | `lib/quarantine.sh` | `quarantine.tsv`: add, prune, list, show |
 | `lib/brew.sh` | Homebrew maintenance, auto-fixes, casks, build log archives |
 | `lib/macports.sh` | MacPorts maintenance, result check, MacPorts log archives, commands installed twice |
 | `lib/migrate.sh` | `--migration-report`, port name guesses; `--migrate`, one function per step (`migrate_preconditions` → `migrate_check_formula` → `migrate_check_usage` → `migrate_check_port`, then `migrate_dry_run_plan` in dry-run, or `migrate_check_sudo` → `migrate_install` → `migrate_verify` → `migrate_uninstall_formula`) |
-| `lib/report.sh` | `brew doctor`, unused apps, unblocking hints, summary, notification |
+| `lib/report.sh` | `brew doctor`, unused apps, unblocking hints, summary, notification (when, sound, time limit) |
+| `praetorian-schedule` | Standalone: the overnight `launchd` job (`install`, `uninstall`, `status`); doesn't load `lib/` |
 | `ci/check` | Lint, format, secrets, workflows and tests (Linux containers) |
 | `ci/macos-tests` | The same tests on macOS under `/bin/bash` 3.2 |
 
@@ -608,14 +712,18 @@ ci/check lint tests      # ShellCheck + bats only
 ci/check fix-format      # apply shfmt's formatting, when the Formatting check fails
 ```
 
-The bats tests (`tests/*.bats`, one file per area: main scenarios, options, interactive mode under a pseudo-terminal, robustness, MacPorts and `--migrate`, `praetorian-sudo-setup`) run praetorian for real on Linux (`ci/check`) and macOS (`ci/macos-tests`), with fakes in `tests/stubs/` in front of the `PATH`. Every `tests/*.bats` file is picked up by both runners. Each test gets its own temporary `HOME`, so `~/praetorian` there is a scratch directory:
+The bats tests (`tests/*.bats`, one file per area: main scenarios, options, interactive mode under a pseudo-terminal, robustness, MacPorts and `--migrate`, notifications and `--ac-power-only`, `praetorian-sudo-setup`, `praetorian-schedule`) run praetorian for real on Linux (`ci/check`) and macOS (`ci/macos-tests`), with fakes in `tests/stubs/` in front of the `PATH`. Every `tests/*.bats` file is picked up by both runners. Each test gets its own temporary `HOME`, so `~/praetorian` there is a scratch directory:
 
 | Fake | Records calls in | Driven by |
 |---|---|---|
 | `brew` | `$BREW_CALLS` | `BREW_OUTDATED_*` (and `_FORMULA_AFTER`), `BREW_UPGRADE_*` (and `*2` for the retry), `BREW_CASK_*`, `BREW_FETCH_RC`, `BREW_REINSTALL_RC`, `BREW_LIST_FILES`, `BREW_USES`, `BREW_LEAVES`, `BREW_PREFIX[_RC]`, `BREW_REPOSITORY`, `BREW_CASKROOM`, `BREW_DOCTOR_OUTPUT`/`BREW_DOCTOR_RC` (`brew doctor`), `BREW_BUILD_LOG` (the upgrade writes a build log under `~/Library/Logs/Homebrew/<f>/`), `BREW_HANG_ON` (a subcommand that never ends, for Ctrl-C tests), `BREW_STDIN_FILE` (`brew update` records whether its stdin is a terminal and the line it reads) |
 | `port` | `$PORT_CALLS` | `PORT_VERSION_*`, `PORT_SELFUPDATE_RC`, `PORT_OUTDATED[_AFTER]`, `PORT_UPGRADE_*`, `PORT_INSTALL_RC`, `PORT_AVAILABLE`, `PORT_CONTENTS`, `PORT_INACTIVE`, `PORT_LEAVES` |
 | `sudo` | `$SUDO_CALLS` | `SUDO_DENY=1` simulates an authentication that can't happen |
-| `osascript` | `$OSASCRIPT_CALLS` | — (no notification pops up during the tests) |
+| `osascript` | `$OSASCRIPT_CALLS` (one argument per line) | — (no notification pops up during the tests) |
+| `defaults` | — | `DEFAULTS_BEEP_SOUND`: the alert sound `defaults read -g com.apple.sound.beep.sound` answers (Tink by default, empty = not set); the tests never read the machine's real preferences |
+| `pmset` | — | `PMSET_SOURCE`: what `pmset -g batt` says the Mac draws from (`AC Power` by default) |
+| `launchctl` | `$LAUNCHCTL_CALLS` | `LAUNCHCTL_BOOTSTRAP_RC`, `LAUNCHCTL_BOOTOUT_RC`, `LAUNCHCTL_DISABLED`, `LAUNCHCTL_LAST_EXIT`; loaded state in `$LAUNCHCTL_CALLS.loaded`. The real `launchd` is never touched |
+| `plutil` | — | the real `plutil` on macOS (the generated plist is really checked, and a test reads it back with `plutil -extract`), a minimal `-lint` on Linux; `PLUTIL_LINT_RC` forces a failure |
 | `xcodebuild`, `xcode-select` | `$XCODEBUILD_CALLS` (xcodebuild) | `XCODEBUILD_LICENSE_RC`, `XCODEBUILD_FIRSTLAUNCH_RC`, `XCODEBUILD_DOWNLOAD_RC`, `XCODE_SELECT_PATH`: nothing is downloaded, and the tests don't depend on how Xcode is set up on the machine |
 | `id`, `bioutil`, `chown` | `$CHOWN_CALLS` (chown) | `FAKE_UID`, `BIOUTIL_TEMPLATES`: `praetorian-sudo-setup` as a fake root |
 | `mktemp` | — | gives Linux the macOS `mktemp -t prefix` behavior (passes through on macOS) |
@@ -629,7 +737,7 @@ The tests run in the container as **your** user (`--user $(id -u):$(id -g)`), no
 
 Some tests are skipped depending on the platform, with the reason printed by bats:
 
-- `tests/interactive.bats` (praetorian under a pseudo-terminal, as when started by hand) needs `script(1)`: it runs on macOS (`ci/macos-tests`) and is skipped in the Linux container, which has no `script`. Every other file runs without a terminal, so in unattended mode.
+- `tests/interactive.bats` (praetorian under a pseudo-terminal, as when started by hand) needs `script(1)`: it runs on macOS (`ci/macos-tests`) and is skipped in the Linux container, which has no `script`. Every other file runs without a terminal, so in unattended mode. Because it only runs under bash 3.2, its `[[ … ]]` assertions end with `|| false` (see [Conventions](#conventions)).
 - "started as root" needs real root or `unshare -r` (a user namespace, Linux); "file owned by another user" needs real root to `chown`. Both are skipped elsewhere, and a few tests that assume a non-root user are skipped when run as root.
 - Tests that need a setuid-root `/usr/bin/sudo`, `git` or `tar` are skipped where those are missing, and a couple of tests that would reach a real Homebrew are skipped on a machine where one is installed.
 
@@ -642,6 +750,7 @@ Some tests are skipped depending on the platform, with the reason printed by bat
 - Never run Homebrew developer commands (`brew cat`, `brew linkage`, anything in `dev-cmd/`), not even while debugging: they silently switch Homebrew to its development branch ([decision 13](#13-stay-on-homebrews-stable-channel)).
 - No apostrophe inside `"${var:-default}"`: bash 3.2 and 5 parse it as an opening quote.
 - A function whose failure must stop the session isn't called on the left of `||` or `&&`, or in an `if`: `set -e` is off inside it there. `migrate` and its steps return 0 and report their outcome through `BLOCKERS` for that reason; `summary`, whose return code is the session's, is called with `set -e` suspended explicitly around that one call.
+- In a test that only runs on macOS (skipped in the Linux container), write `[[ … ]] || false`: under bash 3.2, a failing `[[ ]]` that isn't the test's last command doesn't fail the test. Elsewhere, bash 5 in the container catches it.
 - Counters are incremented with `x=$((x + 1))`, not `x+=1` (which appends text unless the variable was declared `-i`, and ShellCheck can't see that across files).
 - ShellCheck checks every file on its own too. A global set in one file and used in another needs a one-line `# shellcheck disable=SC2034` (or `SC2153`) with the reason, on that line only.
 
@@ -696,7 +805,10 @@ The day that shaped version 1.2.0.
 - **Display glitch:** a deferred cask first prints a red `✗ … (code 1)` line, then the "deferred" warning. The counters are right.
 - **`latest` casks are reinstalled on every run** because of `--greedy`. `--greedy-auto-updates` would avoid that.
 - **No time estimate.** Recording build durations per formula would make it possible to show an estimated total and offer a `--quick` mode that skips the long builds.
-- **No scheduler yet.** A `launchd` agent running `--unattended` overnight would make the long builds painless; the mode and the notification are ready for it.
+- **The scheduled job is only partly checked against the real `launchd`.** The tests check the plist with the real `plutil` on macOS and run the job's exact command line in an environment like `launchd`'s, but never load it in the real `launchd` (that would change the machine running the tests). On the development Mac (2026-10-16), the real `launchctl bootstrap` accepted a generated plist and `launchctl print` showed the expected program and arguments; the job was then booted out before it ever ran. No real night run yet: check `praetorian-schedule status` the morning after the first one.
+- **The scheduled job doesn't wake the Mac.** `pmset repeat wakeorpoweron` needs root, so it's documented (see [Scheduling](#scheduling-overnight-runs)) rather than done by `praetorian-schedule`.
+- **A job delayed by sleep runs when the Mac wakes up**, possibly while you're using it (at `Nice 10`). A "don't start if more than N hours late" rule would need praetorian to know the scheduled time; not done.
+- **Notifications show up under Script Editor's name** (see [decision 21](#21-notify-when-nobody-is-watching)), and nothing happens when you click them.
 - **Fewer formulae, faster runs.** On an Intel Mac, every formula you keep gets recompiled on each update. Pruning unused ones is the biggest time saver.
 - **MacPorts maintenance is only partly checked against the real thing.** On the development Mac (MacPorts 2.12.7), `port version` and `port echo all` (used by `--migration-report`) have run for real. The rest (`port outdated` lines with `<`, `Error: Failed to <phase> <port>`, `Error: See …/main.log`, `does not match expected platform`, `port contents`) is tested with the fake `port` only, based on MacPorts' documented behavior. Watch the first real maintenance session and the first `--migrate`, and adjust the patterns if needed.
 - **`--migrate` compares command names only.** A port can provide the same commands with different defaults or variants; praetorian doesn't run them to compare behavior.
