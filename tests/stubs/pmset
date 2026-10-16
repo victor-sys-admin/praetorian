@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# Fake pmset for the tests: "pmset -g batt" answers as on a Mac drawing
+# from $PMSET_SOURCE ("AC Power" by default, "Battery Power", or
+# anything else for an unexpected answer).
+#
+if [[ "${1:-} ${2:-}" == "-g batt" ]]; then
+    echo "Now drawing from '${PMSET_SOURCE:-AC Power}'"
+    [[ "${PMSET_SOURCE:-AC Power}" == "AC Power" ]] ||
+        printf ' -InternalBattery-0 (id=1234)\t80%%; discharging; 4:00 remaining present: true\n'
+fi
+exit 0
