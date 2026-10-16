@@ -280,6 +280,8 @@ EOF
     # The following steps were not run.
     run grep -E '^(outdated|fetch|upgrade|doctor)' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
+    # Interrupted on purpose: no "Stopped" notification.
+    [ ! -s "${OSASCRIPT_CALLS}" ]
 }
 
 # --- Output analysis and reports ---------------------------------------------------
