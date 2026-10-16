@@ -1,0 +1,520 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 victor-sys-admin
+#
+# praetorian-schedule — runs praetorian overnight with launchd.
+#
+# Installs a per-user LaunchAgent (~/Library/LaunchAgents) that starts
+# "praetorian --unattended --ac-power-only" at a set time, every day or
+# on one weekday.
+#
+# Why launchd and a user agent, not cron or a system daemon:
+#   - launchd runs a job the Mac slept through as soon as it wakes up
+#     (several missed runs count as one); cron simply skips it;
+#   - cron needs Full Disk Access on recent macOS: granting it widens
+#     what any cron job can read, the opposite of hardening;
+#   - Homebrew refuses to run as root: a LaunchDaemon (root) is out.
+#
+# Security (CIS Apple macOS Benchmark, PCI DSS v4 8.6.2):
+#   - no password stored, no sudo here: whatever needs sudo is deferred
+#     by praetorian's unattended mode to the next session from a terminal;
+#   - the agent's plist is the user's, mode 644, written through a temp
+#     file and checked with plutil before launchd sees it;
+#   - launchd runs the path written in the plist every night: praetorian
+#     and its directory must belong to the user (or root) and not be
+#     writable by group or others, or nothing is installed;
+#   - no extra privacy permission (Full Disk Access) is asked for.
+#
+# Usage: praetorian-schedule install [--at HH:MM] [--weekday DAY] [--dry-run]
+#        praetorian-schedule uninstall
+#        praetorian-schedule status
+#        praetorian-schedule --help
+#
+# Exit codes: 0 done, or installed and loaded (status); 1 error, or
+# something to fix (status); 3 not installed (status).
+#
+set -euo pipefail
+
+readonly LABEL=io.github.victor-sys-admin.praetorian
+readonly DEFAULT_AT=03:30
+# Started in the plist's environment: /bin/bash 3.2 through
+# "#!/usr/bin/env bash", and macOS's own tools. praetorian finds brew at
+# its standard locations by itself.
+readonly JOB_PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+usage() {
+    cat <<EOF
+Usage: $0 install [--at HH:MM] [--weekday DAY] [--dry-run]
+       $0 uninstall
+       $0 status
+
+Runs "praetorian --unattended --ac-power-only" with launchd, as you,
+without any password.
+
+  install     installs (or replaces) the job; every day at ${DEFAULT_AT} by default
+    --at HH:MM      start time, 24-hour clock (e.g. 23:15)
+    --weekday DAY   once a week: mon … sun, or 0 … 7 (0 and 7 are Sunday)
+    --dry-run       prints the job without installing anything
+  uninstall   stops and removes the job
+  status      shows the job, its last run and what to fix
+
+A Mac asleep at that time runs the job when it wakes up. A Mac that is
+shut down doesn't: see "Scheduling" in the README to wake it up first.
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+fail() {
+    printf '%s\n' "$@" >&2
+    exit 1
+}
+
+# Real path of a file, symbolic links resolved (praetorian may be
+# reached through a link, e.g. ~/.local/bin).
+real_path() {
+    local src=$1 dir
+    while [[ -L "${src}" ]]; do
+        dir=$(CDPATH='' cd -P "$(dirname "${src}")" && pwd)
+        src=$(readlink "${src}")
+        [[ "${src}" == /* ]] || src="${dir}/${src}"
+    done
+    dir=$(CDPATH='' cd -P "$(dirname "${src}")" && pwd)
+    printf '%s/%s\n' "${dir}" "$(basename "${src}")"
+}
+
+# trust_problem <path>: why launchd shouldn't run it every night, nothing
+# if it can. Same rule as praetorian's own lib/ check.
+trust_problem() {
+    local path=$1 uid
+    uid=$(id -u)
+    if [[ -n "$(find "${path}" -maxdepth 0 ! -user "${uid}" ! -user 0)" ]]; then
+        echo "belongs to another user"
+    elif [[ -n "$(find "${path}" -maxdepth 0 \( -perm -0020 -o -perm -0002 \))" ]]; then
+        echo "is writable by group or others"
+    fi
+}
+
+# Folders macOS keeps from background jobs (privacy protection): a job
+# reading there fails every night with "Operation not permitted" unless
+# it gets Full Disk Access, which this tool never asks for.
+# Compared with HOME as written and with its real path: praetorian's path
+# has its links resolved (/var → /private/var, a linked home…).
+protected_folder() {
+    local home
+    local -a homes
+    homes=("${HOME}" "$(CDPATH='' cd -P "${HOME}" 2>/dev/null && pwd || echo "${HOME}")")
+    for home in "${homes[@]}"; do
+        case "$1" in
+            "${home}"/Desktop | "${home}"/Desktop/* | "${home}"/Documents | "${home}"/Documents/* | \
+                "${home}"/Downloads | "${home}"/Downloads/* | \
+                "${home}/Library/Mobile Documents" | "${home}/Library/Mobile Documents"/* | \
+                /Volumes/*)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+xml_escape() {
+    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"
+}
+
+# --- Arguments --------------------------------------------------------------
+COMMAND=""
+AT=${DEFAULT_AT}
+WEEKDAY=""
+DRY_RUN=false
+
+parse_weekday() {
+    case "$1" in
+        0 | 7 | sun | sunday) echo 0 ;;
+        1 | mon | monday) echo 1 ;;
+        2 | tue | tuesday) echo 2 ;;
+        3 | wed | wednesday) echo 3 ;;
+        4 | thu | thursday) echo 4 ;;
+        5 | fri | friday) echo 5 ;;
+        6 | sat | saturday) echo 6 ;;
+        *) return 1 ;;
+    esac
+}
+
+parse_args() {
+    case "${1:-}" in
+        install | uninstall | status) COMMAND=$1 ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        "")
+            usage >&2
+            exit 1
+            ;;
+        *)
+            say "Unknown command: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+    while [[ $# -gt 0 ]]; do
+        case "${COMMAND} $1" in
+            "install --at")
+                [[ $# -gt 1 ]] || fail "--at expects a time, e.g. --at 03:30"
+                AT=$2
+                shift
+                ;;
+            "install --weekday")
+                [[ $# -gt 1 ]] || fail "--weekday expects a day, e.g. --weekday sun"
+                WEEKDAY=$(parse_weekday "$(tr '[:upper:]' '[:lower:]' <<<"$2")") ||
+                    fail "--weekday: unknown day \"$2\" (mon … sun, or 0 … 7)."
+                shift
+                ;;
+            "install --dry-run") DRY_RUN=true ;;
+            *)
+                say "Unknown option for ${COMMAND}: $1" >&2
+                usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+    if [[ "${COMMAND}" == install ]]; then
+        [[ "${AT}" =~ ^([01]?[0-9]|2[0-3]):([0-5][0-9])$ ]] ||
+            fail "--at: \"${AT}\" is not a time between 00:00 and 23:59 (HH:MM)."
+        HOUR=$((10#${BASH_REMATCH[1]}))
+        MINUTE=$((10#${BASH_REMATCH[2]}))
+    fi
+}
+
+# --- Environment checks ---------------------------------------------------------
+# Everything install needs before it writes anything. Sets PRAETORIAN_BIN,
+# STATE_HOME.
+check_environment() {
+    # id -u rather than EUID: the tests replace id. As root, the agent
+    # would land in root's own LaunchAgents, and Homebrew refuses root.
+    if [[ "$(id -u)" -eq 0 ]]; then
+        fail "Don't run it with sudo: the job runs as you, and Homebrew refuses root." \
+            "Run it again as yourself: $0 ${COMMAND}"
+    fi
+    [[ "${HOME:-}" == /* ]] || fail "HOME is not an absolute path (${HOME:-empty})."
+    command -v launchctl >/dev/null 2>&1 || fail "launchctl not found: praetorian-schedule is for macOS only."
+}
+
+check_target() {
+    local self problem path
+    self=$(real_path "${BASH_SOURCE[0]}")
+    PRAETORIAN_BIN="$(dirname "${self}")/praetorian"
+    if [[ ! -f "${PRAETORIAN_BIN}" || -L "${PRAETORIAN_BIN}" || ! -x "${PRAETORIAN_BIN}" ]]; then
+        fail "praetorian not found next to this script (${PRAETORIAN_BIN}), or not executable." \
+            "Keep praetorian-schedule in the repository, next to praetorian."
+    fi
+    [[ "${PRAETORIAN_BIN}" != *$'\n'* ]] || fail "The path of praetorian contains a newline: move the repository."
+    for path in "${PRAETORIAN_BIN}" "$(dirname "${PRAETORIAN_BIN}")"; do
+        problem=$(trust_problem "${path}")
+        if [[ -n "${problem}" ]]; then
+            fail "Not installed: ${path} ${problem}." \
+                "launchd would run it every night as you: fix it first (chmod go-w, chown), after checking its content (git status, git diff)."
+        fi
+    done
+    if protected_folder "${PRAETORIAN_BIN}"; then
+        fail "Not installed: praetorian is in ${PRAETORIAN_BIN%/*}, a folder macOS keeps from background jobs." \
+            "The job would fail every night with \"Operation not permitted\"." \
+            "Move the repository, e.g. to ~/praetorian, and run install again from there."
+    fi
+
+    # Same default and rule as praetorian (check_home).
+    STATE_HOME=${PRAETORIAN_HOME:-${HOME}/praetorian}
+    if [[ "${STATE_HOME}" != /* || "${STATE_HOME}" == *$'\n'* ]]; then
+        fail "PRAETORIAN_HOME must be an absolute path on a single line; got: $(printf '%q' "${STATE_HOME}")"
+    fi
+    if protected_folder "${STATE_HOME}"; then
+        fail "Not installed: PRAETORIAN_HOME (${STATE_HOME}) is in a folder macOS keeps from background jobs." \
+            "Choose another one, e.g. export PRAETORIAN_HOME=\"\${HOME}/praetorian\"."
+    fi
+}
+
+# --- launchd ------------------------------------------------------------------
+domain() { echo "gui/$(id -u)"; }
+plist_path() { echo "${HOME}/Library/LaunchAgents/${LABEL}.plist"; }
+
+job_loaded() { launchctl print "$(domain)/${LABEL}" >/dev/null 2>&1; }
+
+# Output captured first, not piped into "grep -q": grep stops at the first
+# match, launchctl then dies of SIGPIPE on its next line, and pipefail
+# turns that into "not disabled".
+job_disabled() {
+    local list
+    list=$(launchctl print-disabled "$(domain)" 2>/dev/null || true)
+    grep -qE "\"${LABEL//./\\.}\" => (disabled|true)" <<<"${list}"
+}
+
+# The job's plist, on stdout.
+#   - StartCalendarInterval: missed runs are run at wake-up;
+#   - ProcessType Standard + Nice 10: builds use the idle CPU at full
+#     speed, yet give way to you if you use the Mac meanwhile. "Background"
+#     would throttle CPU, disk and network even on an idle Mac: hours of
+#     builds would take far longer;
+#   - LimitLoadToSessionType Aqua: only in your graphical session (the
+#     notification needs it), not in SSH sessions;
+#   - stdout to /dev/null: everything is in praetorian's session log;
+#     stderr kept for what happens before that log exists.
+render_plist() {
+    local bin home errlog weekday=""
+    bin=$(xml_escape "${PRAETORIAN_BIN}")
+    home=$(xml_escape "${STATE_HOME}")
+    errlog=$(xml_escape "${STATE_HOME}/logs/launchd.stderr.log")
+    [[ -z "${WEEKDAY}" ]] || weekday=$'\n'"        <key>Weekday</key>"$'\n'"        <integer>${WEEKDAY}</integer>"
+    cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by praetorian-schedule; change it with "praetorian-schedule install". -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${bin}</string>
+        <string>--unattended</string>
+        <string>--ac-power-only</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${JOB_PATH}</string>
+        <key>PRAETORIAN_HOME</key>
+        <string>${home}</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>${HOUR}</integer>
+        <key>Minute</key>
+        <integer>${MINUTE}</integer>${weekday}
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+    <key>StandardErrorPath</key>
+    <string>${errlog}</string>
+</dict>
+</plist>
+EOF
+}
+
+describe_schedule() {
+    local days=(Sunday Monday Tuesday Wednesday Thursday Friday Saturday)
+    if [[ -n "${WEEKDAY}" ]]; then
+        printf 'every %s at %02d:%02d\n' "${days[WEEKDAY]}" "${HOUR}" "${MINUTE}"
+    else
+        printf 'every day at %02d:%02d\n' "${HOUR}" "${MINUTE}"
+    fi
+}
+
+# --- Commands -------------------------------------------------------------------
+TMP_PLIST=""
+BACKUP_PLIST=""
+cleanup() {
+    [[ -z "${TMP_PLIST}" ]] || rm -f "${TMP_PLIST}"
+    [[ -z "${BACKUP_PLIST}" ]] || rm -f "${BACKUP_PLIST}"
+}
+trap cleanup EXIT
+
+install_job() {
+    check_target
+    if [[ "${DRY_RUN}" == true ]]; then
+        say "Dry-run: nothing is installed. Job $(describe_schedule), plist $(plist_path):"
+        say ""
+        render_plist
+        return 0
+    fi
+
+    local plist dir
+    plist=$(plist_path)
+    dir=$(dirname "${plist}")
+    mkdir -p "${dir}"
+    local problem
+    problem=$(trust_problem "${dir}")
+    [[ -z "${problem}" ]] || fail "Not installed: ${dir} ${problem} (fix it: chmod go-w \"${dir}\")."
+    [[ ! -L "${plist}" ]] || fail "Not installed: ${plist} is a symbolic link; remove it first."
+    # The logs directory must exist before launchd opens the stderr file
+    # in it; for you only, as praetorian makes it.
+    mkdir -p "${STATE_HOME}/logs"
+    chmod 700 "${STATE_HOME}/logs"
+
+    # Written and checked next to its final place, then moved: launchd
+    # never sees a half-written or invalid plist.
+    TMP_PLIST=$(mktemp "${dir}/.${LABEL}.XXXXXX")
+    render_plist >"${TMP_PLIST}"
+    chmod 644 "${TMP_PLIST}"
+    if ! plutil -lint "${TMP_PLIST}" >/dev/null; then
+        fail "Not installed: the generated plist doesn't pass plutil -lint (praetorian-schedule defect)." \
+            "Nothing was changed. See it with: $0 install --dry-run"
+    fi
+
+    # Replacing a job: keep the old plist until the new one is loaded.
+    if [[ -f "${plist}" ]]; then
+        BACKUP_PLIST="${plist}.previous.$$"
+        cp -p "${plist}" "${BACKUP_PLIST}"
+    fi
+    if job_loaded; then
+        launchctl bootout "$(domain)/${LABEL}" 2>/dev/null || true
+    fi
+    mv -f "${TMP_PLIST}" "${plist}"
+    TMP_PLIST=""
+    # A job switched off in System Settings > General > Login Items stays
+    # off when loaded: you asked for it now, so it's turned back on.
+    if job_disabled; then
+        launchctl enable "$(domain)/${LABEL}" 2>/dev/null || true
+    fi
+
+    local out rc=0
+    out=$(launchctl bootstrap "$(domain)" "${plist}" 2>&1) || rc=$?
+    if ((rc != 0)); then
+        rollback "${plist}"
+        fail "Not installed: launchctl bootstrap failed (code ${rc}): ${out}" \
+            "Run it from your own session at the Mac (Terminal), not over SSH or as another user." \
+            "If it says \"Input/output error\": $0 uninstall, then install again."
+    fi
+
+    say "Installed: praetorian runs $(describe_schedule) (or when the Mac wakes up, if it was asleep)."
+    say "  Command     : ${PRAETORIAN_BIN} --unattended --ac-power-only"
+    say "  Job         : ${plist}"
+    say "  Session logs: ${STATE_HOME}/logs/"
+    say "  At the end  : a macOS notification sums up the run (none showing up? see"
+    say "                \"No notification shows up\" in the README: Script Editor must be allowed)."
+    say ""
+    say "macOS may show \"Background Items Added\": that's this job (System Settings >"
+    say "General > Login Items lists it). The MacPorts part and casks that need sudo"
+    say "are deferred to your next session from a terminal (no password is stored)."
+    say "A Mac that is shut down doesn't run it; to wake it up 5 minutes before"
+    say "(optional, admin rights), see \"Scheduling\" in the README."
+    say "Check it any time: $0 status"
+}
+
+# Bootstrap failed: put the previous job back as it was, or nothing.
+rollback() {
+    local plist=$1
+    if [[ -n "${BACKUP_PLIST}" ]]; then
+        mv -f "${BACKUP_PLIST}" "${plist}"
+        BACKUP_PLIST=""
+        launchctl bootstrap "$(domain)" "${plist}" >/dev/null 2>&1 || true
+        say "The previous job was put back." >&2
+    else
+        rm -f "${plist}"
+    fi
+}
+
+uninstall_job() {
+    local plist found=false
+    plist=$(plist_path)
+    if job_loaded; then
+        found=true
+        launchctl bootout "$(domain)/${LABEL}" 2>/dev/null ||
+            fail "launchctl bootout $(domain)/${LABEL} failed: the job is still loaded, the plist was kept." \
+                "Run it from your own session at the Mac, then try again."
+    fi
+    if [[ -e "${plist}" || -L "${plist}" ]]; then
+        found=true
+        rm -f "${plist}"
+    fi
+    if [[ "${found}" == true ]]; then
+        say "Uninstalled: praetorian no longer runs on a schedule (logs and quarantine kept)."
+    else
+        say "Nothing to uninstall: no scheduled praetorian job."
+    fi
+}
+
+# plist_value <plist> <key>: the integer or string right after <key>, in
+# the format praetorian-schedule writes.
+plist_value() {
+    sed -nE "/<key>$2<\\/key>/{n;s/.*<(integer|string)>([^<]*)<\\/(integer|string)>.*/\\2/p;}" "$1" | head -n 1
+}
+
+status_job() {
+    local plist rc=0 bin hour minute weekday info state last
+    plist=$(plist_path)
+    if [[ ! -f "${plist}" ]]; then
+        if job_loaded; then
+            say "Loaded in launchd, but ${plist} is missing: run \"$0 uninstall\", then install again."
+            return 1
+        fi
+        say "Not installed. To install: $0 install [--at HH:MM] [--weekday DAY]"
+        return 3
+    fi
+
+    bin=$(sed -nE '/<key>ProgramArguments<\/key>/{n;n;s/.*<string>([^<]*)<\/string>.*/\1/p;}' "${plist}" | head -n 1)
+    hour=$(plist_value "${plist}" Hour)
+    minute=$(plist_value "${plist}" Minute)
+    weekday=$(plist_value "${plist}" Weekday)
+    if [[ "${hour}" =~ ^[0-9]+$ && "${minute}" =~ ^[0-9]+$ ]]; then
+        HOUR=$((10#${hour})) MINUTE=$((10#${minute})) WEEKDAY=${weekday}
+        [[ -z "${WEEKDAY}" || "${WEEKDAY}" =~ ^[0-7]$ ]] || WEEKDAY=""
+        [[ "${WEEKDAY}" != 7 ]] || WEEKDAY=0
+        say "Schedule    : $(describe_schedule)"
+    else
+        say "Schedule    : unreadable (plist edited by hand?)"
+    fi
+    say "Job         : ${plist}"
+    say "Command     : ${bin:-unreadable}"
+    if [[ -z "${bin}" || ! -x "${bin}" ]]; then
+        say "! praetorian is no longer there (repository moved?): run install again from the repository."
+        rc=1
+    fi
+
+    if job_loaded; then
+        info=$(launchctl print "$(domain)/${LABEL}" 2>/dev/null || true)
+        state=$(sed -nE 's/^[[:space:]]*state = (.*)$/\1/p' <<<"${info}" | head -n 1)
+        last=$(sed -nE 's/^[[:space:]]*last exit code = (.*)$/\1/p' <<<"${info}" | head -n 1)
+        say "launchd     : loaded${state:+, ${state}}${last:+, last exit code ${last}}"
+        case "${last}" in
+            "" | 0 | "(never exited)") ;;
+            1) say "  Last run stopped on a block (code 1): see its session log." ;;
+            2) say "  Last run finished with errors (code 2): see its session log." ;;
+            *) say "  Last run ended abnormally: see its session log and the stderr log below." ;;
+        esac
+    else
+        say "! launchd     : not loaded (it will be at your next login): $0 install loads it now."
+        rc=1
+    fi
+    if job_disabled; then
+        say "! Turned off in System Settings > General > Login Items: turn it back on there, or run install again."
+        rc=1
+    fi
+
+    local home latest errlog
+    home=$(plist_value "${plist}" PRAETORIAN_HOME)
+    home=${home:-${PRAETORIAN_HOME:-${HOME}/praetorian}}
+    latest=$(find "${home}/logs" -maxdepth 1 -name 'praetorian_*[0-9].log' -type f 2>/dev/null | sort | tail -n 1 || true)
+    say "Last log    : ${latest:-none yet}"
+    errlog="${home}/logs/launchd.stderr.log"
+    if [[ -s "${errlog}" ]]; then
+        say "stderr log  : ${errlog} (last lines):"
+        tail -n 5 "${errlog}" | sed 's/^/    /'
+    fi
+    return "${rc}"
+}
+
+main() {
+    parse_args "$@"
+    check_environment
+    case "${COMMAND}" in
+        install) install_job ;;
+        uninstall) uninstall_job ;;
+        status)
+            local rc=0
+            status_job || rc=$?
+            exit "${rc}"
+            ;;
+    esac
+}
+
+main "$@"
