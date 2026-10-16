@@ -9,6 +9,11 @@
 # Alpine/BusyBox bats container of ci/check has none: these tests run on
 # macOS, through ci/macos-tests).
 #
+# "[[ … ]] || false": these tests only run under macOS's bash 3.2, where a
+# failing [[ ]] that isn't a test's last command doesn't fail the test
+# (bash < 4.1 doesn't trigger errexit for it). The other files also run
+# under bash 5 in the Linux container, which catches them.
+#
 # Each @test runs in its own subshell: the exported variables are meant to
 # stay local to it.
 # shellcheck disable=SC2030,SC2031
@@ -78,14 +83,51 @@ feed_line() {
     export PORT_OUTDATED=wget BREW_OUTDATED_CASK=bar
     run in_pty "${PRAETORIAN}" </dev/null
     [ "${status}" -eq 0 ]
-    [[ "${output}" != *"Unattended"* ]]
-    [[ "${output}" == *"Some apps will ask for "* ]]
-    [[ "${output}" == *"MacPorts needs sudo"* ]]
+    [[ "${output}" != *"Unattended"* ]] || false
+    [[ "${output}" == *"Some apps will ask for "* ]] || false
+    [[ "${output}" == *"MacPorts needs sudo"* ]] || false
     grep -qx "${PRAETORIAN_PORT_PREFIX}/bin/port -N selfupdate" "${SUDO_CALLS}"
     grep -qx "${PRAETORIAN_PORT_PREFIX}/bin/port -N -p upgrade wget" "${SUDO_CALLS}"
     run grep -q -- '^-n ' "${SUDO_CALLS}"
     [ "${status}" -eq 1 ]
-    # Notification: unattended mode only.
+    # From a terminal, a short session doesn't notify (see below).
+    [ ! -s "${OSASCRIPT_CALLS}" ]
+}
+
+@test "interactive: session longer than PRAETORIAN_NOTIFY_AFTER → notification with a sound" {
+    PRAETORIAN_NOTIFY_AFTER=0 run in_pty "${PRAETORIAN}" </dev/null
+    [ "${status}" -eq 0 ]
+    grep -qx 'Maintenance completed successfully.' "${OSASCRIPT_CALLS}"
+    # The alert sound of System Settings > Sound (fake defaults: Tink).
+    [ "$(tail -n 1 "${OSASCRIPT_CALLS}")" = Tink ]
+}
+
+@test "interactive + --notify, failure → notification with the same alert sound" {
+    export BREW_OUTDATED_FORMULA=foo BREW_UPGRADE_RC=1 BREW_UPGRADE_OUTPUT='Error: foo: something broke'
+    run in_pty "${PRAETORIAN}" --notify </dev/null
+    [ "${status}" -eq 2 ]
+    grep -q '^Finished with errors (' "${OSASCRIPT_CALLS}"
+    [ "$(tail -n 1 "${OSASCRIPT_CALLS}")" = Tink ]
+}
+
+@test "interactive: the alert sound set in System Settings is used" {
+    DEFAULTS_BEEP_SOUND=/System/Library/Sounds/Submarine.aiff run in_pty "${PRAETORIAN}" --notify </dev/null
+    [ "${status}" -eq 0 ]
+    [ "$(tail -n 1 "${OSASCRIPT_CALLS}")" = Submarine ]
+}
+
+@test "interactive: alert sound setting unreadable → Glass" {
+    DEFAULTS_BEEP_SOUND="" run in_pty "${PRAETORIAN}" --notify </dev/null
+    [ "${status}" -eq 0 ]
+    [ "$(tail -n 1 "${OSASCRIPT_CALLS}")" = Glass ]
+}
+
+@test "interactive: PRAETORIAN_NOTIFY_AFTER not a number → default (no command run from it)" {
+    local marker="${BATS_TEST_TMPDIR}/evaluated"
+    PRAETORIAN_NOTIFY_AFTER="a[\$(touch ${marker})]" run in_pty "${PRAETORIAN}" </dev/null
+    [ "${status}" -eq 0 ]
+    [ ! -e "${marker}" ]
+    # Default 300 s: a short session doesn't notify.
     [ ! -s "${OSASCRIPT_CALLS}" ]
 }
 
@@ -102,8 +144,8 @@ feed_line() {
     export BREW_OUTDATED_CASK=bar BREW_CASK_RC=1 BREW_CASK_OUTPUT='sudo: a password is required'
     run in_pty "${PRAETORIAN}" --unattended </dev/null
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Unattended: apps that need sudo will be deferred."* ]]
-    [[ "${output}" == *"Deferred (needs sudo"* ]]
+    [[ "${output}" == *"Unattended: apps that need sudo will be deferred."* ]] || false
+    [[ "${output}" == *"Deferred (needs sudo"* ]] || false
     grep -qx -- "-n ${PRAETORIAN_PORT_PREFIX}/bin/port -N selfupdate" "${SUDO_CALLS}"
     grep -qx 'Done. To do from a terminal (sudo): cask bar' "${OSASCRIPT_CALLS}"
 }
@@ -113,7 +155,7 @@ feed_line() {
     local raw="${BATS_TEST_TMPDIR}/pty_out"
     run in_pty "${PRAETORIAN}" </dev/null
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"Problems found in the brew / port output:"* ]]
-    [[ "${output}" == *"- Error: foo: something broke"* ]]
+    [[ "${output}" == *"Problems found in the brew / port output:"* ]] || false
+    [[ "${output}" == *"- Error: foo: something broke"* ]] || false
     grep -q $'\033\\[' "${raw}"
 }
