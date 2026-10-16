@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# Fake defaults for the tests: the tests never read the real preferences
+# of the machine. "defaults read -g com.apple.sound.beep.sound" answers
+# $DEFAULTS_BEEP_SOUND (default /System/Library/Sounds/Tink.aiff); empty
+# string = the key doesn't exist (code 1, as the real one).
+#
+set -u
+if [[ "$*" == "read -g com.apple.sound.beep.sound" ]]; then
+    value=${DEFAULTS_BEEP_SOUND-/System/Library/Sounds/Tink.aiff}
+    if [[ -z "${value}" ]]; then
+        echo "The domain/default pair of (kCFPreferencesAnyApplication, com.apple.sound.beep.sound) does not exist" >&2
+        exit 1
+    fi
+    echo "${value}"
+    exit 0
+fi
+exit 1
