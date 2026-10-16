@@ -41,7 +41,7 @@ collect_scripts() {
     local f restore
     restore=$(shopt -p nullglob || true)
     shopt -s nullglob
-    for f in praetorian praetorian-sudo-setup lib/*.sh ci/* tests/*.bats tests/stubs/*; do
+    for f in praetorian praetorian-sudo-setup praetorian-schedule lib/*.sh ci/* tests/*.bats tests/stubs/*; do
         [[ -f "${f}" && ! -L "${f}" ]] && SCRIPTS+=("${f}")
     done
     eval "${restore}"
