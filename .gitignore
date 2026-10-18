@@ -4,6 +4,8 @@ logs/
 quarantine.tsv
 migrated.tsv
 .toolchain
+# macOS version of the last session
+.macos_version
 .lock/
 # Lock taken over from a crashed session, while it is being removed
 .lock.stale.*
