@@ -1,0 +1,26 @@
+name: Feature request
+description: Something praetorian should do, check or explain.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What went wrong or what you had to do by hand. A real case helps most (most of praetorian's design comes from real failures).
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like praetorian to do
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      placeholder: Intel (x86_64), macOS 15.8.1

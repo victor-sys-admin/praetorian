@@ -42,6 +42,25 @@ GitHub Actions runs `ci/check` and `ci/macos-tests` on every pull request
 (each push to its branch) and on `main` once merged. A branch without a
 pull request isn't checked by CI: run both locally before opening one.
 
+## Commit messages
+
+One commit per file (or per directory when the files go together, such
+as `tests/stubs/`), with a one-line subject and no body:
+
+```
+ADDING --> <path> {<what it is>}
+UPDATING --> <path> {<what changed>, <what else changed>}
+```
+
+`ADDING` for a new file, `UPDATING` for a change. The braces say what
+changed, not how. Examples from the history:
+
+```
+ADDING --> lib/doctor.sh {--doctor read-only health check with quoted fix commands, formula_external_users}
+UPDATING --> ci/check {Pick the first container engine whose daemon answers}
+UPDATING --> tests/stubs/brew {info --json=v2, installed on request, uninstall, info --cask, per-formula dependents}
+```
+
 ## Conventions
 
 The full list is in the README, section
