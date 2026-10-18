@@ -49,8 +49,8 @@ in_praetorian() {
     touch "${HOME}/Library/LaunchAgents/homebrew.mxcl.wget.plist"
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: wget runs as a Homebrew service"* ]]
-    [[ "${output}" == *"brew services stop wget"* ]]
+    [[ "${output}" == *"BLOCKED: wget runs as a Homebrew service"* ]] || false
+    [[ "${output}" == *"brew services stop wget"* ]] || false
     run grep -q -- '-N install' "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
     run grep -q '^uninstall' "${BREW_CALLS}"
@@ -60,12 +60,13 @@ in_praetorian() {
 @test "--migrate: port not found → refused, search command suggested" {
     export BREW_LIST_FILES="/usr/local/Cellar/node/24.1/bin/node"
     export PORT_AVAILABLE="nodejs22"
-    run "${PRAETORIAN}" --migrate node
+    # Named explicitly: node alone is a known trap (see tests/migrate.bats).
+    run "${PRAETORIAN}" --migrate node=node
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: no MacPorts port named node"* ]]
-    [[ "${output}" == *"Error: Port node not found"* ]]
-    [[ "${output}" == *"port search --name --glob 'nodejs*'"* ]]
-    [[ "${output}" == *"praetorian --migrate node=<port-name>"* ]]
+    [[ "${output}" == *"BLOCKED: no MacPorts port named node"* ]] || false
+    [[ "${output}" == *"Error: Port node not found"* ]] || false
+    [[ "${output}" == *"port search --name --glob 'nodejs*'"* ]] || false
+    [[ "${output}" == *"praetorian --migrate node=<port-name>"* ]] || false
     run grep -q -- '-N install' "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -73,11 +74,14 @@ in_praetorian() {
 @test "--migrate: port already installed and active → no install, formula uninstalled" {
     wget_formula
     export PORT_ACTIVE="wget"
+    touch "${PRAETORIAN_PORT_PREFIX}/bin/wget"
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"wget already installed and active in MacPorts"* ]]
+    [[ "${output}" == *"wget already installed and active in MacPorts"* ]] || false
     run grep -q -- ' install ' "${PORT_CALLS}" "${SUDO_CALLS}"
     [ "${status}" -eq 1 ]
+    # Marked as requested: "port uninstall leaves" won't take it away.
+    grep -qx -- '-N setrequested wget' "${PORT_CALLS}"
     grep -qx 'uninstall --formula wget' "${BREW_CALLS}"
 }
 
@@ -98,10 +102,10 @@ EOF
     chmod +x "${wrap}/brew"
     PATH="${wrap}:${PATH}" run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: uninstalling wget from Homebrew failed"* ]]
-    [[ "${output}" == *"Error: Permission denied"* ]]
-    [[ "${output}" == *"installed twice"* ]]
-    [[ "${output}" != *"migrated to MacPorts"* ]]
+    [[ "${output}" == *"BLOCKED: uninstalling wget from Homebrew failed"* ]] || false
+    [[ "${output}" == *"Error: Permission denied"* ]] || false
+    [[ "${output}" == *"installed twice"* ]] || false
+    [[ "${output}" != *"migrated to MacPorts"* ]] || false
     grep -qx -- '-N install wget' "${PORT_CALLS}"
     [ ! -e "${HOME}/praetorian/migrated.tsv" ]
 }
@@ -112,8 +116,8 @@ EOF
     export PORT_INSTALL_OUTPUT='Error: Current platform "darwin 25" does not match expected platform "darwin 24"'
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: MacPorts was installed for another macOS version"* ]]
-    [[ "${output}" != *"installing wget with MacPorts failed"* ]]
+    [[ "${output}" == *"BLOCKED: MacPorts was installed for another macOS version"* ]] || false
+    [[ "${output}" != *"installing wget with MacPorts failed"* ]] || false
     run grep -q '^uninstall' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -124,7 +128,7 @@ EOF
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 2 ]
     [ "$(grep -c 'BLOCKED:' <<<"${output}")" -eq 1 ]
-    [[ "${output}" != *"No service or shell startup file"* ]]
+    [[ "${output}" != *"No service or shell startup file"* ]] || false
     run grep -q 'info' "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -159,9 +163,9 @@ EOF
     export PORT_SELFUPDATE_OUTPUT='Error: Current platform "darwin 25" does not match expected platform "darwin 24"'
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: MacPorts was installed for another macOS version"* ]]
-    [[ "${output}" == *'Current platform "darwin 25"'* ]]
-    [[ "${output}" != *"port selfupdate failed"* ]]
+    [[ "${output}" == *"BLOCKED: MacPorts was installed for another macOS version"* ]] || false
+    [[ "${output}" == *'Current platform "darwin 25"'* ]] || false
+    [[ "${output}" != *"port selfupdate failed"* ]] || false
     run grep -q upgrade "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -171,7 +175,7 @@ EOF
     mkdir -p "${BREW_PREFIX}/bin"
     PATH="${BREW_PREFIX}/bin:${PRAETORIAN_PORT_PREFIX}/bin:${PATH}" run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Homebrew comes before MacPorts in the PATH"* ]]
+    [[ "${output}" == *"Homebrew comes before MacPorts in the PATH"* ]] || false
 }
 
 @test "side by side: MacPorts before Homebrew in the PATH → no warning" {
@@ -179,8 +183,8 @@ EOF
     mkdir -p "${BREW_PREFIX}/bin"
     PATH="${PRAETORIAN_PORT_PREFIX}/bin:${BREW_PREFIX}/bin:${PATH}" run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Homebrew / MacPorts side by side"* ]]
-    [[ "${output}" != *"Homebrew comes before MacPorts"* ]]
+    [[ "${output}" == *"Homebrew / MacPorts side by side"* ]] || false
+    [[ "${output}" != *"Homebrew comes before MacPorts"* ]] || false
 }
 
 # --- Unit: sudo safety --------------------------------------------------------
@@ -190,7 +194,7 @@ EOF
     # with /opt/local/bin first: the check must still apply.
     unset PRAETORIAN_PORT_PREFIX
     run in_praetorian 'port_bin_trusted() { return 1; }; port_sudo_safe && echo yes || echo no'
-    [[ "${output}" == *"BLOCKED: /opt/local/bin/port can't be trusted with sudo"* ]]
+    [[ "${output}" == *"BLOCKED: /opt/local/bin/port can't be trusted with sudo"* ]] || false
     [ "${lines[${#lines[@]} - 1]}" = "no" ]
 }
 
@@ -208,7 +212,7 @@ EOF
 @test "unit: test prefix with a real sudo → port not owned by root blocked" {
     [ "$(id -u)" -ne 0 ] || skip "running as root"
     run in_praetorian 'port_sudo_is_real() { return 0; }; port_sudo_safe && echo yes || echo no'
-    [[ "${output}" == *"can't be trusted with sudo"* ]]
+    [[ "${output}" == *"can't be trusted with sudo"* ]] || false
     [ "${lines[${#lines[@]} - 1]}" = "no" ]
 }
 
