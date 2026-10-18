@@ -9,6 +9,14 @@ README (section "Latest release") must match, and so must the top entry
 of this file: a test checks all three. No git tag exists yet for these
 versions.
 
+## 1.5.1 - 2026-10-18
+
+### Fixed
+
+- `--migration-report` explained every kind of `[ ]` note, even those
+  that didn't appear (a `[brew service running]` legend with no service
+  running): it now explains only the notes listed above it.
+
 ## 1.5.0 - 2026-10-18
 
 Shaped by the day the author's Intel Mac moved from Homebrew to MacPorts
@@ -140,9 +148,6 @@ version carries both.
 
 ### Fixed
 
-- `--migration-report` explained every kind of `[ ]` note, even those
-  that didn't appear (a `[brew service running]` legend with no service
-  running): it now explains only the notes listed above it.
 - `--migrate` compared every `bin` directory of the keg, internal ones
   included (`libexec/bin` of pipx and scons, `lib/rustlib/…/bin` of
   rust): 4 migrations were refused for commands MacPorts has no reason
