@@ -1,5 +1,13 @@
 # praetorian
 
+[![CI](https://github.com/victor-sys-admin/praetorian/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/victor-sys-admin/praetorian/actions/workflows/quality.yml)
+[![Release](https://img.shields.io/github/v/release/victor-sys-admin/praetorian)](https://github.com/victor-sys-admin/praetorian/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![macOS](https://img.shields.io/badge/macOS-Intel%20%26%20Apple%20Silicon-lightgrey)
+![bash 3.2](https://img.shields.io/badge/bash-3.2%2B-4EAA25)
+
+> **Homebrew dropped Intel Macs** (tier 3 since September 2026): no more bottles, every `brew upgrade` compiles from source, sometimes for hours. praetorian keeps Homebrew and MacPorts maintained overnight, then moves your command-line tools to MacPorts' precompiled packages, one safe step at a time: the right port (not a same-name trap), the same project, a binary for your Mac, nothing left broken, and only then the Homebrew formula goes.
+
 A Homebrew and MacPorts maintenance script for macOS that keeps going when things break.
 
 One command runs `brew update`, upgrades formulae and casks, removes orphans, cleans caches, updates MacPorts and its ports, runs `brew doctor`, and lists apps you haven't opened in six months. When an upgrade fails, praetorian logs it, tries a known fix, quarantines what can't be fixed, and moves on to the next package. At the end it tells you exactly what's left to do. When it has to stop something, it says why, what was *not* done, and how to unblock it.
@@ -535,7 +543,8 @@ The code lives where you cloned it. The state lives in `PRAETORIAN_HOME` (`~/pra
 | `lib/*.sh` | The code, by topic (see [Code layout](#code-layout)) | yes |
 | `praetorian-sudo-setup` | One-time Touch ID setup for sudo | yes |
 | `praetorian-schedule` | Installs, removes and checks the overnight `launchd` job | yes |
-| `ci/`, `tests/`, `.github/` | Checks, tests and CI (see [Development](#development)) | yes |
+| `ci/`, `tests/`, `.github/` | Checks, tests and CI (see [Development](#development)), issue and pull request templates | yes |
+| `docs/` | How to record the demo, and the repository's social preview image (`social-preview.svg`, rendered to `.png`) | yes |
 | *In `PRAETORIAN_HOME`:* | | |
 | `logs/praetorian_<timestamp>.log` | Full session log, including the complete brew output (last 30 kept, plus every one under 7 days). `logs/` is made private (`700`): it lists your paths and packages | no |
 | `logs/praetorian_<timestamp>_buildlogs.tar.gz` | Homebrew build logs produced during the session (same retention) | no |
