@@ -25,36 +25,36 @@ sudo_setup() {
 @test "sudo-setup: --help prints the usage, no root needed" {
     run "${SUDO_SETUP}" --help
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Usage: sudo "* ]]
-    [[ "${output}" == *"--disable"* ]]
+    [[ "${output}" == *"Usage: sudo "* ]] || false
+    [[ "${output}" == *"--disable"* ]] || false
 }
 
 @test "sudo-setup: unknown option → code 1, nothing written" {
     sudo_setup --nope
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Unknown option: --nope"* ]]
-    [[ "${output}" == *"Usage: sudo "* ]]
+    [[ "${output}" == *"Unknown option: --nope"* ]] || false
+    [[ "${output}" == *"Usage: sudo "* ]] || false
     [ ! -e "${PAM}" ]
 }
 
 @test "sudo-setup: too many arguments → code 1" {
     sudo_setup --disable extra
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Too many arguments"* ]]
+    [[ "${output}" == *"Too many arguments"* ]] || false
 }
 
 @test "sudo-setup: refuses without root" {
     [ "$(id -u)" -ne 0 ] || skip "running as root"
     PRAETORIAN_SUDO_LOCAL="${PAM}" run "${SUDO_SETUP}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Run it with sudo"* ]]
+    [[ "${output}" == *"Run it with sudo"* ]] || false
     [ ! -e "${PAM}" ]
 }
 
 @test "sudo-setup: PRAETORIAN_SUDO_LOCAL refused under a real sudo" {
     FAKE_UID=0 SUDO_USER=someone PRAETORIAN_SUDO_LOCAL="${PAM}" run "${SUDO_SETUP}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"PRAETORIAN_SUDO_LOCAL is for the tests only"* ]]
+    [[ "${output}" == *"PRAETORIAN_SUDO_LOCAL is for the tests only"* ]] || false
     [ ! -e "${PAM}" ]
 }
 
@@ -63,19 +63,19 @@ sudo_setup() {
     for target in /etc/pam.d/sudo /private/etc/x /usr/local/x /System/x relative/x "${BATS_TEST_TMPDIR}/../etc/x"; do
         FAKE_UID=0 SUDO_USER="" PRAETORIAN_SUDO_LOCAL="${target}" run "${SUDO_SETUP}"
         [ "${status}" -eq 1 ]
-        [[ "${output}" == *"PRAETORIAN_SUDO_LOCAL is for the tests only"* ]]
+        [[ "${output}" == *"PRAETORIAN_SUDO_LOCAL is for the tests only"* ]] || false
     done
     ln -s "${BATS_TEST_TMPDIR}/elsewhere" "${PAM}"
     sudo_setup
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"PRAETORIAN_SUDO_LOCAL is for the tests only"* ]]
+    [[ "${output}" == *"PRAETORIAN_SUDO_LOCAL is for the tests only"* ]] || false
     [ ! -e "${BATS_TEST_TMPDIR}/elsewhere" ]
 }
 
 @test "sudo-setup: refuses when no fingerprint is enrolled" {
     BIOUTIL_TEMPLATES=0 sudo_setup
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"No fingerprint enrolled"* ]]
+    [[ "${output}" == *"No fingerprint enrolled"* ]] || false
     [ ! -e "${PAM}" ]
 }
 
@@ -118,7 +118,7 @@ sudo_setup() {
     sudo_setup
     sudo_setup
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"already on"* ]]
+    [[ "${output}" == *"already on"* ]] || false
     run find "${BATS_TEST_TMPDIR}" -name 'sudo_local.bak.*'
     [ -z "${output}" ]
 }
@@ -138,6 +138,6 @@ sudo_setup() {
 @test "sudo-setup: --disable when off → nothing to do" {
     sudo_setup --disable
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"wasn't on"* ]]
+    [[ "${output}" == *"wasn't on"* ]] || false
     [ ! -e "${PAM}" ]
 }
