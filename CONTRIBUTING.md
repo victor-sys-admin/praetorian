@@ -38,8 +38,9 @@ ships, and nothing to install. Please keep it that way.
    "Latest release" heading of the README together: a test checks that
    they match.
 
-GitHub Actions runs `ci/check` and `ci/macos-tests` on every push and pull
-request.
+GitHub Actions runs `ci/check` and `ci/macos-tests` on every pull request
+(each push to its branch) and on `main` once merged. A branch without a
+pull request isn't checked by CI: run both locally before opening one.
 
 ## Conventions
 
