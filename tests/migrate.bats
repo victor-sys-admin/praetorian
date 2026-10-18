@@ -478,6 +478,10 @@ in_praetorian() {
     [[ "${output}" == *"foo (Homebrew: https://foo.dev — MacPorts: https://www.kde.org)"* ]] || false
     [[ "${output}" == *"step → step-cli,step-ca (praetorian --migrate step=step-cli,step-ca)"* ]] || false
     [[ "${output}" == *"4 port(s) checked, 1 without one."* ]] || false
+    # Legend: only the notes shown above (no service, no shell file here).
+    [[ "${output}" == *"[no binary for this Mac: …] → MacPorts would compile it"* ]] || false
+    [[ "${output}" != *"[brew service running]"* ]] || false
+    [[ "${output}" != *"[referenced in ~/.zshrc…]"* ]] || false
     run grep -wE 'install|uninstall|selfupdate|select|setrequested' "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
