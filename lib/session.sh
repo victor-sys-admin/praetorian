@@ -234,30 +234,59 @@ has_full_xcode() {
     [[ -d /Applications/Xcode.app ]] || [[ "$(xcode-select -p 2>/dev/null)" == *Xcode*.app* ]]
 }
 
+# macOS version seen by the previous session: after a macOS update, Xcode
+# has to install its system components again ("first launch" not
+# finished), and saying so explains a block that otherwise comes out of
+# nowhere. Same approach as TOOLCHAIN_FILE (lib/quarantine.sh).
+readonly MACOS_VERSION_FILE="${PRAETORIAN_HOME}/.macos_version"
+
+# macos_version_record <version>: kept for the next session. Nothing when
+# the version is unknown (no sw_vers), or on a dry-run (changes no state).
+macos_version_record() {
+    [[ -n "$1" && "${DRY_RUN}" != true ]] || return 0
+    printf '%s\n' "$1" >"${MACOS_VERSION_FILE}" 2>/dev/null ||
+        log_detail "macOS version not recorded: ${MACOS_VERSION_FILE} not writable"
+}
+
 # Xcode installed but not ready (not selected, license not accepted, first
 # launch not done): builds fail or hang waiting. Stop the session and say
-# what to run.
+# what to run: only the command for the problem found (the next one, if
+# any, is checked at the next session).
 check_xcode_ready() {
-    has_full_xcode || return 0
-    local selected problem=""
+    local selected problem="" current previous
+    local -a todo=()
+    current=$(sw_vers -productVersion 2>/dev/null || true)
+    previous=$(cat "${MACOS_VERSION_FILE}" 2>/dev/null || true)
+    if ! has_full_xcode; then
+        macos_version_record "${current}"
+        return 0
+    fi
     selected=$(xcode-select -p 2>/dev/null || true)
     if [[ "${selected}" != *Xcode*.app* ]]; then
         problem="Xcode is installed but not selected (xcode-select -p = ${selected:-nothing})."
+        todo=("  sudo xcode-select -s /Applications/Xcode.app")
     elif ! xcodebuild -license check >/dev/null 2>&1; then
         problem="The Xcode license hasn't been accepted."
+        todo=("  sudo xcodebuild -license accept")
     elif ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
         problem="Xcode's first launch isn't finished."
+        if [[ -n "${previous}" && -n "${current}" && "${previous}" != "${current}" ]]; then
+            problem="macOS was updated (${previous} → ${current}): Xcode has to reinstall its system components (its first launch isn't finished)."
+        fi
+        todo=("  sudo xcodebuild -runFirstLaunch")
     fi
+    # Recorded only once Xcode is ready: while any problem is left (the
+    # license, then the first launch), the next session still explains the
+    # block by the macOS update.
+    [[ -n "${problem}" ]] || macos_version_record "${current}"
     [[ -z "${problem}" ]] && return 0
 
     log_detail "XCODE not ready: ${problem}"
     block "Xcode isn't ready" \
         "${problem} Homebrew and MacPorts would build with a half-configured Xcode: failures, or builds hanging forever (seen before: cmake at 0% CPU)." \
         "Nothing was done this session." \
-        "Run these once (Touch ID / password requested), then run praetorian again:" \
-        "  sudo xcode-select -s /Applications/Xcode.app" \
-        "  sudo xcodebuild -license accept" \
-        "  sudo xcodebuild -runFirstLaunch"
+        "Run this once (Touch ID / password requested), then run praetorian again:" \
+        "${todo[@]}"
     finish 1
 }
 
@@ -453,6 +482,43 @@ check_ac_power() {
     finish 1
 }
 
+# Unattended only: launchd can start the session right after the Mac
+# wakes up, before the Wi-Fi is back ("Could not resolve host: github.com"
+# on 2026-10-17: brew update failed, then an hour of download retries).
+# Waits up to NETWORK_WAIT seconds for github.com to answer; still no
+# network: blocked, rather than a session where every step fails. From a
+# terminal, the user sees the errors and runs it again: no wait.
+check_network() {
+    [[ "${UNATTENDED}" == true ]] || return 0
+    local wait=${NETWORK_WAIT} waited=0 pause
+    # Digits only, read as decimal (same reason as PRAETORIAN_MIN_FREE_GB).
+    if [[ "${wait}" =~ ^[0-9]+$ ]]; then
+        wait=$((10#${wait}))
+    else
+        warn "PRAETORIAN_NETWORK_WAIT is not a whole number of seconds: default 300 s used."
+        wait=300
+    fi
+    while ! curl -sS -o /dev/null --head --max-time 10 https://github.com >>"${LOG_FILE}" 2>&1; do
+        if ((waited >= wait)); then
+            log_detail "Network: github.com unreachable after ${waited} s"
+            if [[ "${DRY_RUN}" == true ]]; then
+                warn "No network (github.com unreachable): a real session would be blocked."
+                return 0
+            fi
+            block "no network (github.com unreachable after ${waited} s)" \
+                "Every brew update, download and MacPorts sync needs the network. Started right after the Mac woke up, the Wi-Fi may not be back yet." \
+                "Nothing was done this session." \
+                "The next scheduled run goes ahead." \
+                "Or run it now from a terminal: ${PRAETORIAN_ROOT}/praetorian"
+            finish 1
+        fi
+        pause=$((wait - waited < 15 ? wait - waited : 15))
+        sleep "${pause}"
+        waited=$((waited + pause))
+    done
+    ((waited == 0)) || log_detail "Network: back after ${waited} s"
+}
+
 # One session at a time. The lock is a directory (mkdir is atomic)
 # holding the PID of the session that owns it.
 #
@@ -558,20 +624,47 @@ rotate_logs() {
     done
 }
 
+# rotate_candidates <pattern>: the files to remove, one per line. Sorted
+# by date, those beyond the LOG_RETENTION newest, and only if older than
+# LOG_MIN_AGE_DAYS: a migration loop (one session per formula) would
+# otherwise remove the logs of its own first runs (2026-10-17: 45
+# sessions in an afternoon, the first failures had no log left).
+#
+# No xargs: with no matching file, GNU xargs (findutils in front of the
+# PATH) still runs "ls -t" once, which lists the current directory, and
+# its files would become candidates. The names are praetorian's own
+# (praetorian_<timestamp>…), and every candidate must be in LOG_DIR.
+rotate_candidates() {
+    local old
+    local -a files=()
+    while IFS= read -r old; do
+        files+=("${old}")
+    done < <(find "${LOG_DIR}" -maxdepth 1 -name "$1" -type f 2>/dev/null || true)
+    ((${#files[@]} > LOG_RETENTION)) || return 0
+    # shellcheck disable=SC2012 # our own names, no newline; ls -t is the date sort BSD and GNU share (stat differs)
+    ls -t -- "${files[@]}" 2>/dev/null |
+        tail -n +$((LOG_RETENTION + 1)) |
+        while IFS= read -r old; do
+            [[ "${old}" == "${LOG_DIR}/"* ]] || continue
+            if [[ -n "$(find "${old}" -prune -mtime +"${LOG_MIN_AGE_DAYS}" 2>/dev/null)" ]]; then
+                printf '%s\n' "${old}"
+            fi
+        done
+    return 0
+}
+
 rotate_pattern() {
-    local pattern=$1 count
-    count=$(find "${LOG_DIR}" -maxdepth 1 -name "${pattern}" -type f 2>/dev/null | wc -l | tr -d ' ')
-    if ((count > LOG_RETENTION)) && [[ "${DRY_RUN}" == true ]]; then
+    local pattern=$1 candidates count old
+    candidates=$(rotate_candidates "${pattern}")
+    [[ -n "${candidates}" ]] || return 0
+    count=$(wc -l <<<"${candidates}" | tr -d ' ')
+    if [[ "${DRY_RUN}" == true ]]; then
         # Dry-run changes no state: only say what a real run would remove.
-        info "Dry-run: $((count - LOG_RETENTION)) old log file(s) would be removed (only the last ${LOG_RETENTION} are kept)."
-        log_detail "ROTATION (dry-run): ${pattern}: ${count} file(s), $((count - LOG_RETENTION)) would be removed"
-    elif ((count > LOG_RETENTION)); then
-        # Sorted by date, the oldest beyond the threshold are deleted.
-        find "${LOG_DIR}" -maxdepth 1 -name "${pattern}" -type f -print0 2>/dev/null |
-            xargs -0 ls -t 2>/dev/null |
-            tail -n +$((LOG_RETENTION + 1)) |
-            while IFS= read -r old; do
-                rm -f "${old}" && log_detail "Log removed: ${old}"
-            done
+        info "Dry-run: ${count} old log file(s) would be removed (the last ${LOG_RETENTION} and those under ${LOG_MIN_AGE_DAYS} days are kept)."
+        log_detail "ROTATION (dry-run): ${pattern}: ${count} would be removed"
+        return 0
     fi
+    while IFS= read -r old; do
+        rm -f "${old}" && log_detail "Log removed: ${old}"
+    done <<<"${candidates}"
 }
