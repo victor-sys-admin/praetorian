@@ -56,28 +56,28 @@ no_leftovers() {
 @test "schedule: --help prints the usage" {
     run "${SCHEDULE}" --help
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"install [--at HH:MM] [--weekday DAY] [--dry-run]"* ]]
-    [[ "${output}" == *"uninstall"* ]]
-    [[ "${output}" == *"status"* ]]
+    [[ "${output}" == *"install [--at HH:MM] [--weekday DAY] [--dry-run]"* ]] || false
+    [[ "${output}" == *"uninstall"* ]] || false
+    [[ "${output}" == *"status"* ]] || false
 }
 
 @test "schedule: no command or unknown command → code 1, usage, nothing done" {
     run "${SCHEDULE}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Usage:"* ]]
+    [[ "${output}" == *"Usage:"* ]] || false
     run "${SCHEDULE}" start
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Unknown command: start"* ]]
+    [[ "${output}" == *"Unknown command: start"* ]] || false
     [ ! -s "${LAUNCHCTL_CALLS}" ]
 }
 
 @test "schedule: unknown option, or an install option on another command → code 1" {
     run "${SCHEDULE}" install --every-hour
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Unknown option for install: --every-hour"* ]]
+    [[ "${output}" == *"Unknown option for install: --every-hour"* ]] || false
     run "${SCHEDULE}" status --at 03:00
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Unknown option for status: --at"* ]]
+    [[ "${output}" == *"Unknown option for status: --at"* ]] || false
     [ ! -e "${PLIST}" ]
 }
 
@@ -86,11 +86,11 @@ no_leftovers() {
     for at in 24:00 7:60 3:5 abc 12:30:00 "" "03:30;id"; do
         run "${SCHEDULE}" install --at "${at}"
         [ "${status}" -eq 1 ]
-        [[ "${output}" == *"is not a time between 00:00 and 23:59"* ]]
+        [[ "${output}" == *"is not a time between 00:00 and 23:59"* ]] || false
     done
     run "${SCHEDULE}" install --at
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"--at expects a time"* ]]
+    [[ "${output}" == *"--at expects a time"* ]] || false
     [ ! -e "${PLIST}" ]
     [ ! -s "${LAUNCHCTL_CALLS}" ]
 }
@@ -98,7 +98,7 @@ no_leftovers() {
 @test "schedule: invalid --weekday → code 1, nothing written" {
     run "${SCHEDULE}" install --weekday someday
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *'unknown day "someday"'* ]]
+    [[ "${output}" == *'unknown day "someday"'* ]] || false
     run "${SCHEDULE}" install --weekday 8
     [ "${status}" -eq 1 ]
     [ ! -e "${PLIST}" ]
@@ -107,7 +107,7 @@ no_leftovers() {
 @test "schedule: refuses root" {
     FAKE_UID=0 run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Don't run it with sudo"* ]]
+    [[ "${output}" == *"Don't run it with sudo"* ]] || false
     [ ! -e "${PLIST}" ]
     [ ! -s "${LAUNCHCTL_CALLS}" ]
 }
@@ -123,7 +123,7 @@ no_leftovers() {
     done
     PATH="${stubs}:${PATH//${BATS_TEST_DIRNAME}\/stubs:/}" run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"launchctl not found: praetorian-schedule is for macOS only."* ]]
+    [[ "${output}" == *"launchctl not found: praetorian-schedule is for macOS only."* ]] || false
     [ ! -e "${PLIST}" ]
 }
 
@@ -132,7 +132,7 @@ no_leftovers() {
 @test "schedule: install → plist 644 with the job, loaded in the gui domain" {
     run "${SCHEDULE}" install
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Installed: praetorian runs every day at 03:30"* ]]
+    [[ "${output}" == *"Installed: praetorian runs every day at 03:30"* ]] || false
     [ -f "${PLIST}" ]
     [ -n "$(find "${PLIST}" -perm 644)" ]
     run plist_args
@@ -170,7 +170,7 @@ no_leftovers() {
 @test "schedule: --at and --weekday (name, any case, or number)" {
     run "${SCHEDULE}" install --at 23:05 --weekday SUN
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"every Sunday at 23:05"* ]]
+    [[ "${output}" == *"every Sunday at 23:05"* ]] || false
     [ "$(plist_after Hour)" = "<integer>23</integer>" ]
     [ "$(plist_after Minute)" = "<integer>5</integer>" ]
     [ "$(plist_after Weekday)" = "<integer>0</integer>" ]
@@ -178,7 +178,7 @@ no_leftovers() {
     [ "$(plist_after Weekday)" = "<integer>0</integer>" ]
     [ "$(plist_after Hour)" = "<integer>0</integer>" ]
     run "${SCHEDULE}" install --weekday wednesday --at 09:08
-    [[ "${output}" == *"every Wednesday at 09:08"* ]]
+    [[ "${output}" == *"every Wednesday at 09:08"* ]] || false
     [ "$(plist_after Weekday)" = "<integer>3</integer>" ]
     [ "$(plist_after Minute)" = "<integer>8</integer>" ]
 }
@@ -198,9 +198,9 @@ no_leftovers() {
 @test "schedule: --dry-run prints the plist, writes and loads nothing" {
     run "${SCHEDULE}" install --dry-run --at 01:02
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Dry-run: nothing is installed. Job every day at 01:02"* ]]
-    [[ "${output}" == *"<string>${REPO}/praetorian</string>"* ]]
-    [[ "${output}" == *"<string>--ac-power-only</string>"* ]]
+    [[ "${output}" == *"Dry-run: nothing is installed. Job every day at 01:02"* ]] || false
+    [[ "${output}" == *"<string>${REPO}/praetorian</string>"* ]] || false
+    [[ "${output}" == *"<string>--ac-power-only</string>"* ]] || false
     [ ! -e "${PLIST}" ]
     [ ! -e "${HOME}/praetorian" ]
     run grep -E '^(bootstrap|bootout|enable)' "${LAUNCHCTL_CALLS}"
@@ -210,8 +210,8 @@ no_leftovers() {
 @test "schedule: bootstrap fails on a fresh install → code 1, no plist left" {
     LAUNCHCTL_BOOTSTRAP_RC=5 run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Not installed: launchctl bootstrap failed (code 5): Bootstrap failed: 5: Input/output error"* ]]
-    [[ "${output}" == *"not over SSH"* ]]
+    [[ "${output}" == *"Not installed: launchctl bootstrap failed (code 5): Bootstrap failed: 5: Input/output error"* ]] || false
+    [[ "${output}" == *"not over SSH"* ]] || false
     [ ! -e "${PLIST}" ]
     no_leftovers
 }
@@ -221,7 +221,7 @@ no_leftovers() {
     cp "${PLIST}" "${BATS_TEST_TMPDIR}/before"
     LAUNCHCTL_BOOTSTRAP_RC=5 run "${SCHEDULE}" install --at 05:00
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"The previous job was put back."* ]]
+    [[ "${output}" == *"The previous job was put back."* ]] || false
     cmp "${PLIST}" "${BATS_TEST_TMPDIR}/before"
     no_leftovers
 }
@@ -229,7 +229,7 @@ no_leftovers() {
 @test "schedule: plist fails plutil -lint → code 1, nothing installed nor loaded" {
     PLUTIL_LINT_RC=1 run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"doesn't pass plutil -lint"* ]]
+    [[ "${output}" == *"doesn't pass plutil -lint"* ]] || false
     [ ! -e "${PLIST}" ]
     run grep -q '^bootstrap' "${LAUNCHCTL_CALLS}"
     [ "${status}" -eq 1 ]
@@ -259,12 +259,12 @@ no_leftovers() {
     chmod g+w "${copy}/praetorian"
     run "${copy}/praetorian-schedule" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"praetorian is writable by group or others"* ]]
+    [[ "${output}" == *"praetorian is writable by group or others"* ]] || false
     chmod g-w "${copy}/praetorian"
     chmod o+w "${copy}"
     run "${copy}/praetorian-schedule" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"is writable by group or others"* ]]
+    [[ "${output}" == *"is writable by group or others"* ]] || false
     [ ! -e "${PLIST}" ]
     [ ! -s "${LAUNCHCTL_CALLS}" ]
 }
@@ -275,7 +275,7 @@ no_leftovers() {
     rm "${copy}/praetorian"
     run "${copy}/praetorian-schedule" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"praetorian not found next to this script"* ]]
+    [[ "${output}" == *"praetorian not found next to this script"* ]] || false
     [ ! -e "${PLIST}" ]
 }
 
@@ -284,18 +284,18 @@ no_leftovers() {
     scratch_repo "${copy}"
     run "${copy}/praetorian-schedule" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"a folder macOS keeps from background jobs"* ]]
-    [[ "${output}" == *"Operation not permitted"* ]]
+    [[ "${output}" == *"a folder macOS keeps from background jobs"* ]] || false
+    [[ "${output}" == *"Operation not permitted"* ]] || false
     [ ! -e "${PLIST}" ]
 }
 
 @test "schedule: PRAETORIAN_HOME relative or in ~/Downloads → refused" {
     PRAETORIAN_HOME=relative/dir run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"PRAETORIAN_HOME must be an absolute path"* ]]
+    [[ "${output}" == *"PRAETORIAN_HOME must be an absolute path"* ]] || false
     PRAETORIAN_HOME="${HOME}/Downloads/state" run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"PRAETORIAN_HOME (${HOME}/Downloads/state) is in a folder macOS keeps"* ]]
+    [[ "${output}" == *"PRAETORIAN_HOME (${HOME}/Downloads/state) is in a folder macOS keeps"* ]] || false
     [ ! -e "${PLIST}" ]
 }
 
@@ -316,7 +316,7 @@ no_leftovers() {
     ln -s "${BATS_TEST_TMPDIR}/elsewhere" "${PLIST}"
     run "${SCHEDULE}" install
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"is a symbolic link"* ]]
+    [[ "${output}" == *"is a symbolic link"* ]] || false
     [ ! -e "${BATS_TEST_TMPDIR}/elsewhere" ]
 }
 
@@ -352,19 +352,19 @@ no_leftovers() {
     "${SCHEDULE}" install
     run "${SCHEDULE}" uninstall
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Uninstalled"* ]]
+    [[ "${output}" == *"Uninstalled"* ]] || false
     grep -qx "bootout ${DOMAIN}/${LABEL}" "${LAUNCHCTL_CALLS}"
     [ ! -e "${PLIST}" ]
     run "${SCHEDULE}" uninstall
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Nothing to uninstall"* ]]
+    [[ "${output}" == *"Nothing to uninstall"* ]] || false
 }
 
 @test "schedule: uninstall when bootout fails → code 1, plist kept" {
     "${SCHEDULE}" install
     LAUNCHCTL_BOOTOUT_RC=1 run "${SCHEDULE}" uninstall
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"the job is still loaded, the plist was kept"* ]]
+    [[ "${output}" == *"the job is still loaded, the plist was kept"* ]] || false
     [ -f "${PLIST}" ]
 }
 
@@ -381,7 +381,7 @@ no_leftovers() {
 @test "schedule: status, not installed → code 3" {
     run "${SCHEDULE}" status
     [ "${status}" -eq 3 ]
-    [[ "${output}" == *"Not installed."* ]]
+    [[ "${output}" == *"Not installed."* ]] || false
 }
 
 @test "schedule: status, installed and loaded → code 0, schedule, last run" {
@@ -390,27 +390,27 @@ no_leftovers() {
     : >"${HOME}/praetorian/logs/praetorian_20261016_030500.log"
     run "${SCHEDULE}" status
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Schedule    : every Saturday at 03:05"* ]]
-    [[ "${output}" == *"Command     : ${REPO}/praetorian"* ]]
-    [[ "${output}" == *"launchd     : loaded, not running, last exit code 0"* ]]
-    [[ "${output}" == *"Last log    : ${HOME}/praetorian/logs/praetorian_20261016_030500.log"* ]]
+    [[ "${output}" == *"Schedule    : every Saturday at 03:05"* ]] || false
+    [[ "${output}" == *"Command     : ${REPO}/praetorian"* ]] || false
+    [[ "${output}" == *"launchd     : loaded, not running, last exit code 0"* ]] || false
+    [[ "${output}" == *"Last log    : ${HOME}/praetorian/logs/praetorian_20261016_030500.log"* ]] || false
 }
 
 @test "schedule: status explains the last exit code" {
     "${SCHEDULE}" install
     LAUNCHCTL_LAST_EXIT=2 run "${SCHEDULE}" status
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"finished with errors (code 2)"* ]]
+    [[ "${output}" == *"finished with errors (code 2)"* ]] || false
     LAUNCHCTL_LAST_EXIT=1 run "${SCHEDULE}" status
-    [[ "${output}" == *"stopped on a block (code 1)"* ]]
+    [[ "${output}" == *"stopped on a block (code 1)"* ]] || false
 }
 
 @test "schedule: status shows the stderr log when it has something" {
     "${SCHEDULE}" install
     echo "early failure" >"${HOME}/praetorian/logs/launchd.stderr.log"
     run "${SCHEDULE}" status
-    [[ "${output}" == *"stderr log  : ${HOME}/praetorian/logs/launchd.stderr.log"* ]]
-    [[ "${output}" == *"    early failure"* ]]
+    [[ "${output}" == *"stderr log  : ${HOME}/praetorian/logs/launchd.stderr.log"* ]] || false
+    [[ "${output}" == *"    early failure"* ]] || false
 }
 
 @test "schedule: status, not loaded or praetorian moved → code 1 with what to do" {
@@ -418,20 +418,20 @@ no_leftovers() {
     rm -f "${LAUNCHCTL_CALLS}.loaded"
     run "${SCHEDULE}" status
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"not loaded"* ]]
+    [[ "${output}" == *"not loaded"* ]] || false
     "${SCHEDULE}" install
     sed "s#<string>${REPO}/praetorian</string>#<string>/nonexistent/praetorian</string>#" "${PLIST}" >"${PLIST}.new"
     mv "${PLIST}.new" "${PLIST}"
     run "${SCHEDULE}" status
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"praetorian is no longer there"* ]]
+    [[ "${output}" == *"praetorian is no longer there"* ]] || false
 }
 
 @test "schedule: status, turned off in Login Items → code 1" {
     "${SCHEDULE}" install
     LAUNCHCTL_DISABLED=1 run "${SCHEDULE}" status
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Turned off in System Settings > General > Login Items"* ]]
+    [[ "${output}" == *"Turned off in System Settings > General > Login Items"* ]] || false
 }
 
 @test "schedule: status, loaded but plist gone → code 1" {
@@ -439,5 +439,5 @@ no_leftovers() {
     rm -f "${PLIST}"
     run "${SCHEDULE}" status
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"is missing"* ]]
+    [[ "${output}" == *"is missing"* ]] || false
 }
