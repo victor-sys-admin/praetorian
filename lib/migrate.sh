@@ -688,11 +688,19 @@ migration_report() {
         for item in "${PLAN_NONE[@]}"; do say "    ${C_DIM}-${C_RESET} ${item}"; done
     fi
     if [[ "${PLAN_HAS_NOTES}" == true ]]; then
+        # Only the notes that appear above: a legend for a service that
+        # isn't running reads like a problem that isn't there.
+        local listed
+        listed=$(printf '%s\n' "${PLAN_SAME[@]+"${PLAN_SAME[@]}"}" "${PLAN_DIFFER[@]+"${PLAN_DIFFER[@]}"}" \
+            "${PLAN_APPROX[@]+"${PLAN_APPROX[@]}"}" "${PLAN_NONE[@]+"${PLAN_NONE[@]}"}")
         say ""
         info "The [ ] notes will block the migration until they're dealt with:"
-        say "    ${C_DIM}[brew service running]      → brew services stop <formula>, then the MacPorts equivalent (sudo port load <port>)${C_RESET}"
-        say "    ${C_DIM}[referenced in ~/.zshrc…]   → replace those Homebrew paths with MacPorts ones (${PORT_PREFIX}/…)${C_RESET}"
-        say "    ${C_DIM}[no binary for this Mac: …] → MacPorts would compile it (hours, may fail): wait for the binary, or --allow-build${C_RESET}"
+        [[ "${listed}" != *"[brew service running]"* ]] ||
+            say "    ${C_DIM}[brew service running]      → brew services stop <formula>, then the MacPorts equivalent (sudo port load <port>)${C_RESET}"
+        [[ "${listed}" != *"[referenced in "* ]] ||
+            say "    ${C_DIM}[referenced in ~/.zshrc…]   → replace those Homebrew paths with MacPorts ones (${PORT_PREFIX}/…)${C_RESET}"
+        [[ "${listed}" != *"[no binary for this Mac:"* ]] ||
+            say "    ${C_DIM}[no binary for this Mac: …] → MacPorts would compile it (hours, may fail): wait for the binary, or --allow-build${C_RESET}"
     fi
     if ((PLAN_BINARY_CHECKED > 0 || PLAN_BINARY_SKIPPED > 0)); then
         say ""
