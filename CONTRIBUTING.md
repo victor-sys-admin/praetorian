@@ -33,10 +33,10 @@ ships, and nothing to install. Please keep it that way.
    the tests never run the real ones. A new `.bats` file is picked up by
    both runners automatically.
 
-4. Add a line to the `Unreleased` section of [CHANGELOG.md](CHANGELOG.md).
-   When releasing, bump `PRAETORIAN_VERSION` in `praetorian` and the
-   "Latest release" heading of the README together: a test checks that
-   they match.
+4. Add a line to the top entry of [CHANGELOG.md](CHANGELOG.md) (the version being prepared, which `PRAETORIAN_VERSION` and the README's "Latest release" must match: a test checks all three).
+   When releasing, bump `PRAETORIAN_VERSION` in `praetorian`, the
+   "Latest release" heading of the README and the CHANGELOG's top entry
+   together.
 
 GitHub Actions runs `ci/check` and `ci/macos-tests` on every push and pull
 request.
@@ -56,6 +56,9 @@ The full list is in the README, section
 - Code, comments, documentation and terminal output in English.
 - Every block explains why, what was *not* done, and how to unblock it
   (`block` in `lib/ui.sh`).
+- In tests, every `[[ … ]]` assertion ends with `|| false`: under macOS's
+  bash 3.2, a failing `[[ ]]` that isn't the test's last command doesn't
+  fail the test.
 
 ## Don't run Homebrew developer commands
 

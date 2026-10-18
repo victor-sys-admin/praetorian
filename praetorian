@@ -27,17 +27,19 @@
 # Usage   : ./praetorian [--dry-run] [--no-greedy] [--retry-quarantined]
 #                        [--unattended] [--notify | --no-notify]
 #                        [--ac-power-only] [--quiet] [--help]
-#           ./praetorian --migration-report
-#           ./praetorian [--dry-run] --migrate <formula>[=<port>]
-#           (--migrate=<formula>[=<port>] works too; -h = --help)
+#           ./praetorian --migration-report | --status | --doctor | --sbom
+#           ./praetorian [--dry-run] --prune
+#           ./praetorian [--dry-run] [--allow-build] --migrate <formula>[=<port>[,<port>…]] [--migrate …]
+#           ./praetorian [--dry-run] [--allow-build] --migrate-all
+#           (--migrate=<spec> works too; -h = --help)
 # Author  : victor-sys-admin
 # License : GPL-3.0-or-later (see LICENSE)
 #
 # Exit codes:
 #   0   full success
 #   1   prerequisite error (no package manager, root, Xcode not ready,
-#       disk full, on battery with --ac-power-only, another session
-#       running, invalid PRAETORIAN_HOME) or
+#       disk full, on battery with --ac-power-only, no network when
+#       unattended, another session running, invalid PRAETORIAN_HOME) or
 #       migration report blocked
 #   2   one or more steps failed or were blocked
 #   130 interrupted (Ctrl-C)
@@ -47,14 +49,15 @@ set -euo pipefail
 # ----------------------------------------------------------------------------
 # Constants
 # ----------------------------------------------------------------------------
-readonly PRAETORIAN_VERSION="1.3.0"
+readonly PRAETORIAN_VERSION="1.5.0"
 # State directory (logs, quarantine, lock): PRAETORIAN_HOME from the
 # environment, ~/praetorian by default. Checked by check_home once lib/
 # is loaded, before anything is written.
 PRAETORIAN_HOME="${PRAETORIAN_HOME:-${HOME}/praetorian}"
 readonly PRAETORIAN_HOME
 readonly LOG_DIR="${PRAETORIAN_HOME}/logs"
-readonly LOG_RETENTION=30          # number of log files to keep
+readonly LOG_RETENTION=30          # number of log files to keep…
+readonly LOG_MIN_AGE_DAYS=7        # …but none younger than this is removed
 readonly UNUSED_THRESHOLD_DAYS=180 # 6 months
 readonly APP_DIR="/Applications"
 # Quarantine: one package per line, tab-separated fields:
@@ -83,6 +86,9 @@ readonly LOCK_DIR="${PRAETORIAN_HOME}/.lock"
 # PRAETORIAN_MIN_FREE_GB: tests.
 readonly MIN_FREE_GB="${PRAETORIAN_MIN_FREE_GB:-5}"
 readonly WARN_FREE_GB=20
+# Unattended: how long to wait for the network before blocking (seconds).
+# PRAETORIAN_NETWORK_WAIT: checked by check_network.
+readonly NETWORK_WAIT="${PRAETORIAN_NETWORK_WAIT:-300}"
 # Shell startup files (relative to $HOME) searched for Homebrew paths
 # before a formula is uninstalled.
 readonly SHELL_RC_FILES=(.zshenv .zprofile .zshrc .zlogin .bash_profile .bashrc .profile .config/fish/config.fish)
@@ -100,8 +106,11 @@ readonly SESSION_START
 readonly NOTIFY_AFTER="${PRAETORIAN_NOTIFY_AFTER:-300}"
 
 # Options (changed by flags)
-MODE=maintain   # maintain | report (--migration-report) | migrate
-MIGRATE_SPEC="" # "formula" or "formula=port"
+MODE=maintain               # maintain | report | migrate | status | doctor | prune | sbom
+MIGRATE_SPEC=""             # spec being migrated: "formula" or "formula=port[,port…]"
+declare -a MIGRATE_SPECS=() # every --migrate given, in order
+MIGRATE_ALL=false           # --migrate-all
+ALLOW_BUILD=false           # --allow-build: migrate even without a MacPorts binary
 DRY_RUN=false
 GREEDY=true
 QUIET=false
@@ -145,7 +154,7 @@ OUTDATED_PORTS="" # outdated ports, one per line (port_refresh_outdated)
 # and the same for the lib/ directory. Any problem stops praetorian before
 # it does anything.
 # ----------------------------------------------------------------------------
-readonly PRAETORIAN_LIBS=(ui session quarantine brew macports migrate report)
+readonly PRAETORIAN_LIBS=(ui session quarantine brew macports migrate report doctor prune status sbom)
 
 # Real directory of this script, symbolic links resolved.
 praetorian_dir() {
@@ -244,6 +253,14 @@ source "${PRAETORIAN_ROOT}/lib/macports.sh"
 source "${PRAETORIAN_ROOT}/lib/migrate.sh"
 # shellcheck source=lib/report.sh
 source "${PRAETORIAN_ROOT}/lib/report.sh"
+# shellcheck source=lib/doctor.sh
+source "${PRAETORIAN_ROOT}/lib/doctor.sh"
+# shellcheck source=lib/prune.sh
+source "${PRAETORIAN_ROOT}/lib/prune.sh"
+# shellcheck source=lib/status.sh
+source "${PRAETORIAN_ROOT}/lib/status.sh"
+# shellcheck source=lib/sbom.sh
+source "${PRAETORIAN_ROOT}/lib/sbom.sh"
 
 # PRAETORIAN_HOME must be an absolute path on one line: a relative one
 # would follow the current directory, a newline would break the paths
@@ -306,14 +323,37 @@ Homebrew → MacPorts migration:
                 Read-only plan: for each formula you installed yourself, the
                 matching MacPorts port, and what would block its migration.
                 Changes nothing.
-  --migrate <formula>[=<port>]
-                Migrates ONE formula: checks (dependents, service, paths in
-                the shell), installs the port, checks that it provides the
-                same commands, and only then uninstalls the formula.
+  --migrate <formula>[=<port>[,<port>…]]
+                Migrates a formula: checks (dependents, service, paths in
+                the shell, programs outside Homebrew that use it), installs
+                the port(s), checks that every command of the formula is
+                now found in MacPorts, and only then uninstalls the formula.
+                Extra ports after a comma are companions installed with it.
+                Repeat --migrate for several formulae (one session).
                 E.g.: --migrate wget   --migrate python@3.12=python312
-                (--migrate=<formula>[=<port>] works too)
+                      --migrate step=step-cli,step-ca
+                (--migrate=<spec> works too)
+  --migrate-all Migrates every formula the report finds under the same
+                name in MacPorts, leaves first; a blocked one is skipped
+                and listed in the summary.
+  --allow-build Migrates even when MacPorts has no precompiled binary of
+                the port for this Mac (it would compile from source).
 
-Logs       : ${LOG_DIR}/praetorian_<date>.log (last ${LOG_RETENTION} kept)
+Status and cleanup:
+  --status      Read-only: what is migrated, what is left in Homebrew and
+                why, removable leftovers, and the last sessions.
+  --doctor      Read-only health check: broken pipx environments, files
+                Homebrew can't clean, dead PATH entries, broken links,
+                ports MacPorts could remove by mistake… with the command
+                that fixes each one.
+  --prune       Removes the Homebrew dependencies nothing uses any more
+                (what brew autoremove misses), asking before each round.
+                With --dry-run: only lists them. Never when unattended.
+  --sbom        Writes a CycloneDX 1.6 SBOM of the installed software
+                (Homebrew, MacPorts, apps, pipx, npm) in the logs
+                directory, with the changes since the previous one.
+
+Logs       : ${LOG_DIR}/praetorian_<date>.log (last ${LOG_RETENTION} kept, plus every one under ${LOG_MIN_AGE_DAYS} days)
 Quarantine : ${QUARANTINE_FILE} (expires after ${QUARANTINE_DAYS} d)
 EOF
 }
@@ -322,11 +362,22 @@ EOF
 # Argument parsing
 # ----------------------------------------------------------------------------
 # Formula/port names: safe characters only (they end up in grep/awk
-# patterns and in commands run under sudo). "/" only on the formula side,
-# for tap formulae (hashicorp/tap/terraform).
+# patterns, URLs and commands run under sudo). "/" only on the formula
+# side, for tap formulae (hashicorp/tap/terraform). Several ports are
+# separated by commas (a main port and its companions: step=step-cli,step-ca).
 valid_migrate_spec() {
-    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9@._+/-]*(=[A-Za-z0-9][A-Za-z0-9@._+-]*)?$ ]] &&
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9@._+/-]*(=[A-Za-z0-9][A-Za-z0-9@._+-]*(,[A-Za-z0-9][A-Za-z0-9@._+-]*)*)?$ ]] &&
         [[ "$1" != *..* && "$1" != */=* && "${1%%=*}" != */ ]]
+}
+
+# set_mode <mode> <option>: one mode per run (--status and --prune
+# together would be ambiguous). --migrate may be repeated.
+set_mode() {
+    if [[ "${MODE}" != maintain && "${MODE}" != "$1" ]]; then
+        err "$2 can't be combined with another mode option (--migration-report, --migrate, --migrate-all, --status, --doctor, --prune, --sbom)."
+        finish 1
+    fi
+    MODE=$1
 }
 
 parse_args() {
@@ -340,20 +391,32 @@ parse_args() {
             --no-notify) NOTIFY=never ;;
             --ac-power-only) AC_POWER_ONLY=true ;;
             --quiet) QUIET=true ;;
-            --migration-report) MODE=report ;;
+            --migration-report) set_mode report "$1" ;;
+            --status) set_mode status "$1" ;;
+            --doctor) set_mode doctor "$1" ;;
+            --prune) set_mode prune "$1" ;;
+            --sbom) set_mode sbom "$1" ;;
+            --allow-build) ALLOW_BUILD=true ;;
+            --migrate-all)
+                set_mode migrate "$1"
+                MIGRATE_ALL=true
+                ;;
             --migrate | --migrate=*)
+                local spec
                 if [[ "$1" == --migrate=* ]]; then
-                    MIGRATE_SPEC=${1#--migrate=}
+                    spec=${1#--migrate=}
                 else
-                    MIGRATE_SPEC=${2:-}
+                    spec=${2:-}
                     [[ $# -gt 1 ]] && shift
                 fi
-                if ! valid_migrate_spec "${MIGRATE_SPEC}"; then
-                    err "--migrate expects a formula name, optionally followed by =<port>."
-                    err "Examples: --migrate wget    --migrate python@3.12=python312"
+                if ! valid_migrate_spec "${spec}"; then
+                    err "--migrate expects a formula name, optionally followed by =<port> (several ports: =<port>,<port>)."
+                    err "Examples: --migrate wget    --migrate python@3.12=python312    --migrate step=step-cli,step-ca"
                     finish 1
                 fi
-                MODE=migrate
+                set_mode migrate --migrate
+                MIGRATE_SPECS+=("${spec}")
+                MIGRATE_SPEC=${MIGRATE_SPECS[0]}
                 ;;
             --help | -h)
                 usage
@@ -381,7 +444,8 @@ main() {
 
     # Keeps the Mac awake for the whole session (long builds on Intel;
     # sleep used to cut the network in the middle of the night).
-    if [[ -z "${PRAETORIAN_CAFFEINATED:-}" && "${DRY_RUN}" != true && "${MODE}" != report ]] &&
+    if [[ -z "${PRAETORIAN_CAFFEINATED:-}" && "${DRY_RUN}" != true ]] &&
+        [[ "${MODE}" != report && "${MODE}" != status && "${MODE}" != doctor && "${MODE}" != sbom ]] &&
         command -v caffeinate >/dev/null 2>&1; then
         export PRAETORIAN_CAFFEINATED=1
         exec caffeinate -i "$0" "$@"
@@ -399,14 +463,43 @@ main() {
 
     check_prerequisites
 
-    if [[ "${MODE}" == report ]]; then
-        migration_report
-        ((${#BLOCKERS[@]} == 0)) || finish 1
-        finish 0
-    fi
+    # Read-only modes: no lock, no Xcode/network/disk checks, nothing
+    # installed or removed. Their return code is passed on with errexit
+    # suspended for that one call (same reason as summary below): a
+    # non-zero return would otherwise stop the script as an "unexpected
+    # error".
+    local mode_rc=0
+    case "${MODE}" in
+        report)
+            migration_report
+            ((${#BLOCKERS[@]} == 0)) || finish 1
+            finish 0
+            ;;
+        status)
+            set +e
+            status_run
+            mode_rc=$?
+            set -e
+            finish "${mode_rc}"
+            ;;
+        doctor)
+            # doctor_run always returns 0 (a non-zero return would stop
+            # the session through set -e): its verdict is DOCTOR_RC.
+            doctor_run
+            finish "${DOCTOR_RC}"
+            ;;
+        sbom)
+            set +e
+            sbom_run
+            mode_rc=$?
+            set -e
+            finish "${mode_rc}"
+            ;;
+    esac
 
     [[ "${DRY_RUN}" == true ]] || check_xcode_ready
     check_ac_power
+    check_network
     check_disk_space
     acquire_lock
     quarantine_prune
@@ -416,7 +509,9 @@ main() {
     platform_notes
 
     if [[ "${MODE}" == migrate ]]; then
-        migrate
+        migrate_batch
+    elif [[ "${MODE}" == prune ]]; then
+        prune_run
     else
         if [[ "${HAS_BREW}" == true ]]; then
             maintenance_brew

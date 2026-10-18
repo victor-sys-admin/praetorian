@@ -41,7 +41,7 @@ notification_args() {
     grep -qx 'on run argv' "${OSASCRIPT_CALLS}"
     run notification_args
     [ "${lines[0]}" = "Maintenance completed successfully." ]
-    [[ "${lines[1]}" =~ ^Done\ in\ [0-9]+\ s$ ]]
+    [[ "${lines[1]}" =~ ^Done\ in\ [0-9]+\ s$ ]] || false
     [ "${#lines[@]}" -eq 2 ]
 }
 
@@ -50,8 +50,8 @@ notification_args() {
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
     run notification_args
-    [[ "${lines[0]}" == *"failure(s), 0 block(s) — see the log." ]]
-    [[ "${lines[1]}" == "Finished with errors ("*")" ]]
+    [[ "${lines[0]}" == *"failure(s), 0 block(s) — see the log." ]] || false
+    [[ "${lines[1]}" == "Finished with errors ("*")" ]] || false
 }
 
 @test "notify: --no-notify → none, even unattended" {
@@ -121,7 +121,7 @@ notification_args() {
 @test "run_bounded: a failing command doesn't fail the caller" {
     run bash -c "source '${PRAETORIAN}'; set -e; run_bounded 5 false; echo reached"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *reached* ]]
+    [[ "${output}" == *reached* ]] || false
 }
 
 @test "format_duration: seconds, minutes, hours" {
@@ -143,9 +143,9 @@ notification_args() {
 @test "--ac-power-only on battery: blocked, explained, nothing run, notified" {
     PMSET_SOURCE="Battery Power" run "${PRAETORIAN}" --ac-power-only
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: the Mac is on Battery Power (--ac-power-only)"* ]]
-    [[ "${output}" == *"Plug the Mac in"* ]]
-    [[ "${output}" != *"unexpected error"* ]]
+    [[ "${output}" == *"BLOCKED: the Mac is on Battery Power (--ac-power-only)"* ]] || false
+    [[ "${output}" == *"Plug the Mac in"* ]] || false
+    [[ "${output}" != *"unexpected error"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
     [ ! -e "${HOME}/praetorian/.lock" ]
     run notification_args
@@ -155,20 +155,20 @@ notification_args() {
 @test "--ac-power-only on UPS power: blocked too" {
     PMSET_SOURCE="UPS Power" run "${PRAETORIAN}" --ac-power-only
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: the Mac is on UPS Power"* ]]
+    [[ "${output}" == *"BLOCKED: the Mac is on UPS Power"* ]] || false
 }
 
 @test "--ac-power-only, unknown power source: warning, session runs" {
     PMSET_SOURCE="Something New" run "${PRAETORIAN}" --ac-power-only
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Power source unknown (pmset -g batt): --ac-power-only check skipped."* ]]
+    [[ "${output}" == *"Power source unknown (pmset -g batt): --ac-power-only check skipped."* ]] || false
     grep -qx 'update' "${BREW_CALLS}"
 }
 
 @test "--ac-power-only --dry-run on battery: warning only" {
     PMSET_SOURCE="Battery Power" run "${PRAETORIAN}" --ac-power-only --dry-run
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"a real session with --ac-power-only would be blocked"* ]]
+    [[ "${output}" == *"a real session with --ac-power-only would be blocked"* ]] || false
 }
 
 @test "without --ac-power-only: battery doesn't matter, pmset not even asked" {
@@ -180,15 +180,15 @@ notification_args() {
 
 @test "--help lists the new options" {
     run "${PRAETORIAN}" --help
-    [[ "${output}" == *"--notify"* ]]
-    [[ "${output}" == *"--no-notify"* ]]
-    [[ "${output}" == *"--ac-power-only"* ]]
+    [[ "${output}" == *"--notify"* ]] || false
+    [[ "${output}" == *"--no-notify"* ]] || false
+    [[ "${output}" == *"--ac-power-only"* ]] || false
 }
 
 @test "notify: --notify with an unusable PRAETORIAN_HOME → no log directory created" {
     cd "${BATS_TEST_TMPDIR}"
     PRAETORIAN_HOME=relative/state run "${PRAETORIAN}" --notify
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"PRAETORIAN_HOME is not usable"* ]]
+    [[ "${output}" == *"PRAETORIAN_HOME is not usable"* ]] || false
     [ ! -e "${BATS_TEST_TMPDIR}/relative" ]
 }

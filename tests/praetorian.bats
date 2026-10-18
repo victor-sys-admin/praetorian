@@ -37,28 +37,37 @@ with_macports() {
 @test "--help prints the usage" {
     run "${PRAETORIAN}" --help
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Usage: praetorian"* ]]
+    [[ "${output}" == *"Usage: praetorian"* ]] || false
 }
 
 @test "version: --help shows PRAETORIAN_VERSION, a X.Y.Z version" {
     local version
     version=$(sed -nE 's/^readonly PRAETORIAN_VERSION="([^"]*)"$/\1/p' "${BATS_TEST_DIRNAME}/../praetorian")
-    [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || false
     run "${PRAETORIAN}" --help
-    [[ "${output}" == *"praetorian ${version} "* ]]
+    [[ "${output}" == *"praetorian ${version} "* ]] || false
+}
+
+@test "version: README's latest release and CHANGELOG's top entry match PRAETORIAN_VERSION" {
+    local root="${BATS_TEST_DIRNAME}/.." version readme changelog
+    version=$(sed -nE 's/^readonly PRAETORIAN_VERSION="([^"]*)"$/\1/p' "${root}/praetorian")
+    readme=$(sed -n '/^## Latest release/,/^## /p' "${root}/README.md" | sed -nE 's/^### ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n 1)
+    changelog=$(sed -nE 's/^## ([0-9]+\.[0-9]+\.[0-9]+) .*/\1/p' "${root}/CHANGELOG.md" | head -n 1)
+    [ "${readme}" = "${version}" ]
+    [ "${changelog}" = "${version}" ]
 }
 
 @test "unknown option: code 1" {
     run "${PRAETORIAN}" --nope
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Unknown option: --nope"* ]]
+    [[ "${output}" == *"Unknown option: --nope"* ]] || false
 }
 
 @test "dry-run: no brew command that changes the system" {
     export BREW_OUTDATED_FORMULA=foo BREW_OUTDATED_CASK=bar
     run "${PRAETORIAN}" --dry-run
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Maintenance completed successfully."* ]]
+    [[ "${output}" == *"Maintenance completed successfully."* ]] || false
     run grep -E '^(update|upgrade|fetch|install|uninstall|reinstall|cleanup|autoremove|link|unlink)' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -68,7 +77,7 @@ with_macports() {
     export BREW_UPGRADE_OUTPUT=$'foo: A full installation of Xcode.app is required to compile\nthis software. Installing just the Command Line Tools is not sufficient.\nError: foo: An unsatisfied requirement failed this build.'
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"Quarantined"* ]]
+    [[ "${output}" == *"Quarantined"* ]] || false
     run cut -f1,2,4 "${QUARANTINE}"
     [ "${output}" = $'foo\tformula\txcode' ]
 }
@@ -80,7 +89,7 @@ with_macports() {
     export BREW_OUTDATED_FORMULA=foo
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"1 package(s) in quarantine"* ]]
+    [[ "${output}" == *"1 package(s) in quarantine"* ]] || false
     run grep -E '^(fetch|upgrade --formula)' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -100,8 +109,8 @@ with_macports() {
     export BREW_CASK_OUTPUT='sudo: a password is required'
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Deferred (needs sudo"* ]]
-    [[ "${output}" == *"cask bar"* ]]
+    [[ "${output}" == *"Deferred (needs sudo"* ]] || false
+    [[ "${output}" == *"cask bar"* ]] || false
     [ ! -s "${QUARANTINE}" ]
 }
 
@@ -115,8 +124,8 @@ with_macports() {
     run "${PRAETORIAN}"
     kill "${pid}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: another praetorian session is already running (PID ${pid})"* ]]
-    [[ "${output}" == *"What to do"* ]]
+    [[ "${output}" == *"BLOCKED: another praetorian session is already running (PID ${pid})"* ]] || false
+    [[ "${output}" == *"What to do"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
     [ -d "${HOME}/praetorian/.lock" ] # the other session's lock stays
 }
@@ -126,7 +135,7 @@ with_macports() {
     echo 999999 >"${HOME}/praetorian/.lock/pid"
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Lock left by a session that ended abruptly"* ]]
+    [[ "${output}" == *"Lock left by a session that ended abruptly"* ]] || false
     [ ! -e "${HOME}/praetorian/.lock" ]
 }
 
@@ -134,7 +143,7 @@ with_macports() {
     export PRAETORIAN_MIN_FREE_GB=999999999
     run "${PRAETORIAN}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: not enough disk space"* ]]
+    [[ "${output}" == *"BLOCKED: not enough disk space"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
 }
 
@@ -157,7 +166,7 @@ with_macports() {
     export PORT_UPGRADE_OUTPUT=$'Error: Failed to build wget: command execution failed\nError: See /nonexistent/main.log for details.'
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"1 port(s) upgraded, 1 failed: wget"* ]]
+    [[ "${output}" == *"1 port(s) upgraded, 1 failed: wget"* ]] || false
     run cut -f1,2,4,5 "${QUARANTINE}"
     [ "${output}" = $'wget\tport\tbuild\tfailed at the "build" phase' ]
 }
@@ -177,8 +186,8 @@ with_macports() {
     export SUDO_DENY=1 PORT_OUTDATED="wget"
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"MacPorts deferred"* ]]
-    [[ "${output}" == *"MacPorts (selfupdate + upgrade; 1 port(s) outdated"* ]]
+    [[ "${output}" == *"MacPorts deferred"* ]] || false
+    [[ "${output}" == *"MacPorts (selfupdate + upgrade; 1 port(s) outdated"* ]] || false
     run grep -E 'selfupdate|upgrade|uninstall' "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -188,8 +197,8 @@ with_macports() {
     export PORT_SELFUPDATE_RC=1 PORT_OUTDATED="wget"
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: port selfupdate failed"* ]]
-    [[ "${output}" == *"No port was upgraded"* ]]
+    [[ "${output}" == *"BLOCKED: port selfupdate failed"* ]] || false
+    [[ "${output}" == *"No port was upgraded"* ]] || false
     run grep -q upgrade "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -200,8 +209,8 @@ with_macports() {
     export PORT_VERSION_OUTPUT='Error: Current platform "darwin 25" does not match expected platform "darwin 24"'
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: MacPorts was installed for another macOS version"* ]]
-    [[ "${output}" == *"trac.macports.org/wiki/Migration"* ]]
+    [[ "${output}" == *"BLOCKED: MacPorts was installed for another macOS version"* ]] || false
+    [[ "${output}" == *"trac.macports.org/wiki/Migration"* ]] || false
     run grep -q selfupdate "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -215,10 +224,10 @@ with_macports() {
     local stubs="${BATS_TEST_TMPDIR}/stubs_nobrew"
     mkdir -p "${stubs}"
     cp "${BATS_TEST_DIRNAME}/stubs/sudo" "${BATS_TEST_DIRNAME}/stubs/mktemp" \
-        "${BATS_TEST_DIRNAME}/stubs/osascript" "${stubs}/"
+        "${BATS_TEST_DIRNAME}/stubs/osascript" "${BATS_TEST_DIRNAME}/stubs/curl" "${stubs}/"
     PATH="${stubs}:${PATH//${BATS_TEST_DIRNAME}\/stubs:/}" run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Homebrew not found"* ]]
+    [[ "${output}" == *"Homebrew not found"* ]] || false
     grep -qx -- '-N selfupdate' "${PORT_CALLS}"
 }
 
@@ -227,24 +236,25 @@ with_macports() {
 @test "--migration-report without MacPorts: blocked, explains how to install it" {
     run "${PRAETORIAN}" --migration-report
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: MacPorts isn't installed"* ]]
-    [[ "${output}" == *"macports.org/install.php"* ]]
+    [[ "${output}" == *"BLOCKED: MacPorts isn't installed"* ]] || false
+    [[ "${output}" == *"macports.org/install.php"* ]] || false
 }
 
 @test "--migration-report: sorts the formulae, changes nothing" {
     with_macports
     export BREW_LEAVES=$'wget\npython@3.12\nnode\nobscure-tool\nhashicorp/tap/terraform\nimagemagick\nnumpy\npostgresql@15'
-    export PORT_AVAILABLE="wget python312 python313 nodejs20 nodejs22 curl terraform ImageMagick py-numpy postgresql15 postgresql93"
+    export PORT_AVAILABLE="wget python312 python313 nodejs20 nodejs22 curl terraform terraform-1.9 terraform-1.16 ImageMagick ImageMagick7 py-numpy postgresql15 postgresql93"
     run "${PRAETORIAN}" --migration-report
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Same name in MacPorts (1)"* ]]
-    [[ "${output}" == *"python@3.12 → python312"$'\n'* ]]
-    [[ "${output}" == *"node → nodejs20, nodejs22"* ]]
-    [[ "${output}" == *"hashicorp/tap/terraform → terraform"* ]]
-    [[ "${output}" == *"imagemagick → ImageMagick"* ]]
-    [[ "${output}" == *"numpy → py-numpy"* ]]
-    [[ "${output}" == *"postgresql@15 → postgresql15"$'\n'* ]]
-    [[ "${output}" == *"Not found under this name (1)"* ]]
+    [[ "${output}" == *"Same name in MacPorts (1)"* ]] || false
+    # Known names (known_port_spec): the exact spec, nothing else.
+    [[ "${output}" == *"python@3.12 → python312 (praetorian --migrate python@3.12=python312)"$'\n'* ]] || false
+    [[ "${output}" == *"node → nodejs20, nodejs22"* ]] || false
+    [[ "${output}" == *"hashicorp/tap/terraform → terraform-1.16 (praetorian --migrate hashicorp/tap/terraform=terraform-1.16)"* ]] || false
+    [[ "${output}" == *"imagemagick → ImageMagick7 (praetorian --migrate imagemagick=ImageMagick7)"* ]] || false
+    [[ "${output}" == *"numpy → py-numpy"* ]] || false
+    [[ "${output}" == *"postgresql@15 → postgresql15 (praetorian --migrate postgresql@15=postgresql15)"$'\n'* ]] || false
+    [[ "${output}" == *"Not found under this name (1)"* ]] || false
     run grep -E '^(-N|install|uninstall|selfupdate)' "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
     run grep -E '^(uninstall|install|upgrade)' "${BREW_CALLS}"
@@ -258,11 +268,23 @@ with_macports() {
     export PORT_CONTENTS="${PRAETORIAN_PORT_PREFIX}/bin/wget ${PRAETORIAN_PORT_PREFIX}/share/man/man1/wget.1"
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"wget migrated to MacPorts (wget)."* ]]
+    [[ "${output}" == *"wget migrated to MacPorts (wget)."* ]] || false
     grep -qx -- '-N install wget' "${PORT_CALLS}"
     grep -qx 'uninstall --formula wget' "${BREW_CALLS}"
     run cut -f1,2 "${HOME}/praetorian/migrated.tsv"
     [ "${output}" = $'wget\twget' ]
+}
+
+@test "--migrate: only the keg's bin/ counts, not libexec/bin or lib/…/bin" {
+    with_macports
+    export BREW_LIST_FILES=$'/usr/local/Cellar/pipx/1.18.2/bin/pipx\n/usr/local/Cellar/pipx/1.18.2/libexec/bin/python3\n/usr/local/Cellar/pipx/1.18.2/lib/tool/bin/helper'
+    export PORT_AVAILABLE="pipx"
+    export PORT_CONTENTS="${PRAETORIAN_PORT_PREFIX}/bin/pipx"
+    run "${PRAETORIAN}" --migrate pipx
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Commands provided by pipx: pipx "* ]] || false
+    [[ "${output}" == *"pipx migrated to MacPorts (pipx)."* ]] || false
+    grep -qx 'uninstall --formula pipx' "${BREW_CALLS}"
 }
 
 @test "--migrate: command missing on the MacPorts side → Homebrew formula kept" {
@@ -272,9 +294,9 @@ with_macports() {
     export PORT_CONTENTS="${PRAETORIAN_PORT_PREFIX}/bin/python3.12"
     run "${PRAETORIAN}" --migrate python@3.12=python312
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"doesn't provide every command of python@3.12"* ]]
-    [[ "${output}" == *"Missing on the MacPorts side: python3 "* ]]
-    [[ "${output}" == *"was NOT uninstalled"* ]]
+    [[ "${output}" == *"doesn't provide every command of python@3.12"* ]] || false
+    [[ "${output}" == *"Missing in ${PRAETORIAN_PORT_PREFIX}/bin and sbin: python3 "* ]] || false
+    [[ "${output}" == *"was NOT uninstalled"* ]] || false
     run grep -q '^uninstall' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -286,8 +308,8 @@ with_macports() {
     export PORT_AVAILABLE="openssl3"
     run "${PRAETORIAN}" --migrate openssl@3=openssl3
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: other Homebrew formulae depend on openssl@3"* ]]
-    [[ "${output}" == *"curl wget"* ]]
+    [[ "${output}" == *"BLOCKED: other Homebrew formulae depend on openssl@3"* ]] || false
+    [[ "${output}" == *"curl wget"* ]] || false
     run grep -q install "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -301,11 +323,11 @@ with_macports() {
     printf '# /usr/local/opt/mysql-client in a comment: ignored\nexport PATH="/usr/local/opt/mysql-client/bin:$PATH"\nexport X=/usr/local/opt/mysql-client-extra\n' >"${HOME}/.zshrc"
     run "${PRAETORIAN}" --migrate mysql-client=mysql8
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: your shell uses Homebrew paths of mysql-client"* ]]
+    [[ "${output}" == *"BLOCKED: your shell uses Homebrew paths of mysql-client"* ]] || false
     # shellcheck disable=SC2016  # literal $PATH, as printed by praetorian
-    [[ "${output}" == *'~/.zshrc:2: export PATH="/usr/local/opt/mysql-client/bin:$PATH"'* ]]
-    [[ "${output}" != *"~/.zshrc:1"* ]]
-    [[ "${output}" != *"~/.zshrc:3"* ]]
+    [[ "${output}" == *'~/.zshrc:2: export PATH="/usr/local/opt/mysql-client/bin:$PATH"'* ]] || false
+    [[ "${output}" != *"~/.zshrc:1"* ]] || false
+    [[ "${output}" != *"~/.zshrc:3"* ]] || false
     run grep -q install "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -316,8 +338,8 @@ with_macports() {
     export PORT_AVAILABLE="wget" PORT_INSTALL_RC=1
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"BLOCKED: installing wget with MacPorts failed"* ]]
-    [[ "${output}" == *"wget stays installed with Homebrew"* ]]
+    [[ "${output}" == *"BLOCKED: installing wget with MacPorts failed"* ]] || false
+    [[ "${output}" == *"wget stays installed with Homebrew"* ]] || false
     run grep -q '^uninstall' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -328,8 +350,9 @@ with_macports() {
     export PORT_AVAILABLE="wget"
     run "${PRAETORIAN}" --dry-run --migrate wget
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"not run in dry-run"* ]]
-    run grep -q install "${PORT_CALLS}"
+    [[ "${output}" == *"not run in dry-run"* ]] || false
+    # "port installed" (read-only) is allowed, "port install" isn't.
+    run grep -qw install "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
     run grep -q '^uninstall' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
@@ -338,7 +361,7 @@ with_macports() {
 @test "--migrate: invalid name refused" {
     run "${PRAETORIAN}" --migrate 'wget;rm -rf /'
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"--migrate expects a formula name"* ]]
+    [[ "${output}" == *"--migrate expects a formula name"* ]] || false
     run "${PRAETORIAN}" --migrate '../etc=wget'
     [ "${status}" -eq 1 ]
     run "${PRAETORIAN}" --migrate 'wget=a/b'
@@ -347,12 +370,12 @@ with_macports() {
 
 @test "--migrate: tap formula → port named without the tap" {
     with_macports
-    export BREW_LIST_FILES="/usr/local/Cellar/terraform/1.13/bin/terraform"
-    export PORT_AVAILABLE="terraform"
-    run "${PRAETORIAN}" --dry-run --migrate hashicorp/tap/terraform
+    export BREW_LIST_FILES="/usr/local/Cellar/wget/1.25/bin/wget"
+    export PORT_AVAILABLE="wget"
+    run "${PRAETORIAN}" --dry-run --migrate example/tap/wget
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Migration: hashicorp/tap/terraform (Homebrew) → terraform (MacPorts)"* ]]
-    [[ "${output}" == *"sudo port -N install terraform"* ]]
+    [[ "${output}" == *"Migration: example/tap/wget (Homebrew) → wget (MacPorts)"* ]] || false
+    [[ "${output}" == *"sudo port -N install wget"* ]] || false
 }
 
 # --- Code in lib/: safety check before loading ----------------------------
@@ -371,7 +394,7 @@ scratch_copy() {
     scratch_copy
     run "${SCRATCH}/praetorian" --help
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Usage: praetorian"* ]]
+    [[ "${output}" == *"Usage: praetorian"* ]] || false
 }
 
 @test "lib/: file writable by others → refused before anything runs" {
@@ -379,8 +402,8 @@ scratch_copy() {
     chmod o+w "${SCRATCH}/lib/brew.sh"
     run "${SCRATCH}/praetorian"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: praetorian's code in lib/ can't be trusted"* ]]
-    [[ "${output}" == *"lib/brew.sh is writable by group or others"* ]]
+    [[ "${output}" == *"BLOCKED: praetorian's code in lib/ can't be trusted"* ]] || false
+    [[ "${output}" == *"lib/brew.sh is writable by group or others"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
 }
 
@@ -389,7 +412,7 @@ scratch_copy() {
     chmod g+w "${SCRATCH}/lib"
     run "${SCRATCH}/praetorian" --help
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"lib/ is writable by group or others"* ]]
+    [[ "${output}" == *"lib/ is writable by group or others"* ]] || false
 }
 
 @test "lib/: missing file → refused, names it" {
@@ -397,8 +420,8 @@ scratch_copy() {
     rm "${SCRATCH}/lib/macports.sh"
     run "${SCRATCH}/praetorian" --help
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"lib/macports.sh is missing"* ]]
-    [[ "${output}" == *"checkout -- lib/"* ]]
+    [[ "${output}" == *"lib/macports.sh is missing"* ]] || false
+    [[ "${output}" == *"checkout -- lib/"* ]] || false
 }
 
 @test "lib/: symbolic link → refused" {
@@ -407,14 +430,14 @@ scratch_copy() {
     ln -s "${BATS_TEST_TMPDIR}/ui.sh" "${SCRATCH}/lib/ui.sh"
     run "${SCRATCH}/praetorian" --help
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"lib/ui.sh is a symbolic link"* ]]
+    [[ "${output}" == *"lib/ui.sh is a symbolic link"* ]] || false
 }
 
 @test "praetorian called through a symbolic link finds its lib/" {
     ln -s "${PRAETORIAN}" "${BATS_TEST_TMPDIR}/praetorian-link"
     run "${BATS_TEST_TMPDIR}/praetorian-link" --help
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Usage: praetorian"* ]]
+    [[ "${output}" == *"Usage: praetorian"* ]] || false
 }
 
 # --- Unplanned exits are explained ---------------------------------------------
@@ -425,9 +448,9 @@ scratch_copy() {
     export PORT_AVAILABLE="wget" BREW_PREFIX_RC=1
     run "${PRAETORIAN}" --migrate wget
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"BLOCKED: unexpected error in praetorian"* ]]
-    [[ "${output}" == *"in migrate_check_usage (migrate.sh)"* ]]
-    [[ "${output}" == *"brew --prefix"* ]]
+    [[ "${output}" == *"BLOCKED: unexpected error in praetorian"* ]] || false
+    [[ "${output}" == *"in migrate_check_usage (migrate.sh)"* ]] || false
+    [[ "${output}" == *"brew --prefix"* ]] || false
     [ ! -e "${HOME}/praetorian/.lock" ]
     run grep -q install "${PORT_CALLS}"
     [ "${status}" -eq 1 ]
@@ -436,11 +459,11 @@ scratch_copy() {
 @test "planned exits are not reported as unexpected" {
     run "${PRAETORIAN}" --nope
     [ "${status}" -eq 1 ]
-    [[ "${output}" != *"unexpected error"* ]]
+    [[ "${output}" != *"unexpected error"* ]] || false
     export PRAETORIAN_MIN_FREE_GB=999999999
     run "${PRAETORIAN}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" != *"unexpected error"* ]]
+    [[ "${output}" != *"unexpected error"* ]] || false
 }
 
 # --- Unit tests: single functions, praetorian sourced ---------------------------
@@ -515,7 +538,7 @@ in_praetorian() {
     cp "${QUARANTINE}" "${BATS_TEST_TMPDIR}/before"
     run "${PRAETORIAN}" --dry-run
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Dry-run: 1 quarantine entry(ies) would be lifted"* ]]
+    [[ "${output}" == *"Dry-run: 1 quarantine entry(ies) would be lifted"* ]] || false
     cmp "${QUARANTINE}" "${BATS_TEST_TMPDIR}/before"
 }
 
@@ -528,7 +551,7 @@ in_praetorian() {
     [ "${status}" -eq 0 ]
     grep -qx 'fetch --formula --deps --force foo' "${BREW_CALLS}"
     [ "$(grep -cx 'upgrade --formula foo' "${BREW_CALLS}")" -eq 2 ]
-    [[ "${output}" != *"Failed steps"* ]]
+    [[ "${output}" != *"Failed steps"* ]] || false
 }
 
 @test "auto-fix: a fix step that fails stays counted, the retried upgrade doesn't" {
@@ -537,9 +560,9 @@ in_praetorian() {
     export BREW_REINSTALL_RC=1
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"Steps passed: 6   failed: 1"* ]]
-    [[ "${output}" == *"- Rebuilding merve (linked against an outdated library)"* ]]
-    [[ "${output}" != *"- Upgrading formula foo"* ]]
+    [[ "${output}" == *"Steps passed: 6   failed: 1"* ]] || false
+    [[ "${output}" == *"- Rebuilding merve (linked against an outdated library)"* ]] || false
+    [[ "${output}" != *"- Upgrading formula foo"* ]] || false
 }
 
 @test "auto-fix: formula asking for brew unlink → unlinked for the build, linked back" {
@@ -558,8 +581,8 @@ in_praetorian() {
     [ "${status}" -eq 0 ]
     grep -qx -- '-downloadComponent MetalToolchain' "${XCODEBUILD_CALLS}"
     [ "$(grep -cx 'upgrade --formula openjdk' "${BREW_CALLS}")" -eq 2 ]
-    [[ "${output}" == *"✓ Installing the Metal Toolchain (Xcode)"* ]]
-    [[ "${output}" != *"Failed steps"* ]]
+    [[ "${output}" == *"✓ Installing the Metal Toolchain (Xcode)"* ]] || false
+    [[ "${output}" != *"Failed steps"* ]] || false
 }
 
 @test "auto-fix: Metal Toolchain download failing → no 2nd try, both failures counted" {
@@ -568,16 +591,16 @@ in_praetorian() {
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
     [ "$(grep -cx 'upgrade --formula openjdk' "${BREW_CALLS}")" -eq 1 ]
-    [[ "${output}" == *"- Upgrading formula openjdk"* ]]
-    [[ "${output}" == *"- Installing the Metal Toolchain (Xcode)"* ]]
+    [[ "${output}" == *"- Upgrading formula openjdk"* ]] || false
+    [[ "${output}" == *"- Installing the Metal Toolchain (Xcode)"* ]] || false
 }
 
 @test "Xcode selected but its license not accepted → blocked before anything runs" {
     export XCODE_SELECT_PATH=/Applications/Xcode.app/Contents/Developer XCODEBUILD_LICENSE_RC=1
     run "${PRAETORIAN}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: Xcode isn't ready"* ]]
-    [[ "${output}" == *"sudo xcodebuild -license accept"* ]]
+    [[ "${output}" == *"BLOCKED: Xcode isn't ready"* ]] || false
+    [[ "${output}" == *"sudo xcodebuild -license accept"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
 }
 
@@ -586,7 +609,7 @@ in_praetorian() {
     export BREW_UPGRADE_OUTPUT='Error: Failed to fix install linkage'
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"foo is installed despite a brew error"* ]]
+    [[ "${output}" == *"foo is installed despite a brew error"* ]] || false
     [ ! -s "${QUARANTINE}" ]
 }
 
@@ -621,7 +644,7 @@ in_praetorian() {
     [ -d "${BREW_CASKROOM}/bar/1.0" ] && [ ! -e "${BREW_CASKROOM}/bar/1.0.upgrading" ]
     # Both versions there: nothing moved, checked by hand.
     [ -d "${BREW_CASKROOM}/baz/2.0.upgrading" ]
-    [[ "${output}" == *"Cask baz: leftover from an interrupted upgrade"* ]]
+    [[ "${output}" == *"Cask baz: leftover from an interrupted upgrade"* ]] || false
 }
 
 @test "Homebrew on its development branch → developer off, back to stable" {
@@ -651,6 +674,18 @@ in_praetorian() {
     [ ! -e "${LOGS}/praetorian_20200101_000011.log" ]
     [ -e "${LOGS}/praetorian_20200101_000040.log" ]
     [ -n "$(find "${LOGS}" -maxdepth 0 -perm 700)" ]
+}
+
+@test "logs: beyond 30 but less than 7 days old → kept (migration loop)" {
+    mkdir -p "${LOGS}"
+    local i
+    for i in $(seq 10 45); do
+        touch "${LOGS}/praetorian_20261017_1300${i}.log"
+    done
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [ "$(find "${LOGS}" -name 'praetorian_*[0-9].log' | wc -l | tr -d ' ')" -eq 37 ]
+    [ -e "${LOGS}/praetorian_20261017_130010.log" ]
 }
 
 @test "unattended: notification with the message passed as an argument" {
@@ -686,8 +721,41 @@ in_praetorian() {
     touch "${BREW_PREFIX}/bin/wget" "${PRAETORIAN_PORT_PREFIX}/bin/wget"
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"1 command(s) installed by both Homebrew and MacPorts"* ]]
-    [[ "${output}" == *"- wget (formula ?)"* ]]
+    # A plain file (not a link into the Cellar): another installer's.
+    [[ "${output}" == *"No formula you could migrate has its commands installed twice."* ]] || false
+    [[ "${output}" == *"1 command(s) in ${BREW_PREFIX}/bin not installed by Homebrew also exist in MacPorts: wget"* ]] || false
+    [[ "${output}" != *"praetorian --migrate"* ]] || false
+}
+
+@test "side by side: leaf formula listed, dependencies summed up in one line" {
+    with_macports
+    export BREW_PREFIX="${BATS_TEST_TMPDIR}/brew"
+    export BREW_LEAVES="wget"
+    mkdir -p "${BREW_PREFIX}/bin"
+    ln -s ../Cellar/wget/1.25/bin/wget "${BREW_PREFIX}/bin/wget"
+    ln -s ../Cellar/dav1d/1.5/bin/dav1d "${BREW_PREFIX}/bin/dav1d"
+    ln -s ../Cellar/brotli/1.1/bin/brotli "${BREW_PREFIX}/bin/brotli"
+    touch "${PRAETORIAN_PORT_PREFIX}/bin/wget" "${PRAETORIAN_PORT_PREFIX}/bin/dav1d" "${PRAETORIAN_PORT_PREFIX}/bin/brotli"
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"1 Homebrew formula(e) that nothing else needs also come with MacPorts"* ]] || false
+    [[ "${output}" == *"- wget (wget"* ]] || false
+    [[ "${output}" == *"2 command(s) from 2 Homebrew dependencies also exist in MacPorts"* ]] || false
+    [[ "${output}" != *"- dav1d"* ]] || false
+}
+
+@test "side by side: only dependencies duplicated → no warning" {
+    with_macports
+    export BREW_PREFIX="${BATS_TEST_TMPDIR}/brew"
+    export BREW_LEAVES="scrcpy"
+    mkdir -p "${BREW_PREFIX}/bin"
+    ln -s ../Cellar/dav1d/1.5/bin/dav1d "${BREW_PREFIX}/bin/dav1d"
+    touch "${PRAETORIAN_PORT_PREFIX}/bin/dav1d"
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"No formula you could migrate has its commands installed twice."* ]] || false
+    [[ "${output}" == *"1 command(s) from 1 Homebrew dependencies also exist in MacPorts"* ]] || false
+    [[ "${output}" != *"praetorian --migrate"* ]] || false
 }
 
 @test "side by side: brew --prefix failing → no false duplicates" {
@@ -695,8 +763,8 @@ in_praetorian() {
     export BREW_PREFIX_RC=1
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"commands installed twice not checked"* ]]
-    [[ "${output}" != *"installed by both"* ]]
+    [[ "${output}" == *"commands installed twice not checked"* ]] || false
+    [[ "${output}" != *"installed by both"* ]] || false
 }
 
 @test "unit: port_bin_trusted refuses a port binary not owned by root" {
