@@ -70,9 +70,19 @@ Out of scope:
   it belong to root and are writable by root only) and the installers
   Homebrew runs for some casks. Package names passed to `--migrate` are
   restricted to safe characters.
-- **Nothing is stored beyond local state.** praetorian sends nothing
+- **Nothing is stored beyond local state.** praetorian sends no data
   anywhere (the end-of-session notification is a local macOS one). Its state (`PRAETORIAN_HOME`: logs, quarantine, lock) stays on
   the Mac; `logs/` is `700` because it holds the full brew and port output.
+- **Its own network requests** (besides what brew and port do) are HEAD
+  requests over `https` only, with a short timeout, nothing downloaded:
+  to `https://github.com` while an unattended session waits for the
+  network, and to `packages.macports.org` (MacPorts' own server) from
+  `--migrate` and `--migration-report`, naming the proposed ports (up to
+  40 in the report) and this Mac's Darwin version and architecture, to
+  see whether a precompiled binary exists. `--sbom` runs `trivy` when it
+  is installed: on first use trivy downloads its vulnerability database
+  from an external registry and writes `~/.cache/trivy`. The SBOM itself
+  is never sent.
 
 The README section
 [Security: how sudo is handled](README.md#security-how-sudo-is-handled)
