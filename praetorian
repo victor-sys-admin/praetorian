@@ -49,7 +49,7 @@ set -euo pipefail
 # ----------------------------------------------------------------------------
 # Constants
 # ----------------------------------------------------------------------------
-readonly PRAETORIAN_VERSION="1.5.0"
+readonly PRAETORIAN_VERSION="1.5.1"
 # State directory (logs, quarantine, lock): PRAETORIAN_HOME from the
 # environment, ~/praetorian by default. Checked by check_home once lib/
 # is loaded, before anything is written.
