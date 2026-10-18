@@ -166,7 +166,7 @@ The disk needs at least 5 GB free (20 GB recommended); below that, praetorian st
 | actionlint 1.7.12, zizmor 1.31.0 | GitHub workflows (blocking) |
 | bats 1.14.0 | Tests, with the fakes from `tests/stubs/` (blocking) |
 
-The same tests also run **on macOS under `/bin/bash` 3.2** with `ci/macos-tests`: it fetches bats-core 1.14.0 by commit into a temp directory (needs `git`, nothing is installed), puts `/bin` first in the `PATH`, unsets the `PRAETORIAN_*` variables of your shell, and uses the macOS tools. GitHub Actions runs `ci/check` (Linux) and `ci/macos-tests` (`macos-latest`) on every push.
+The same tests also run **on macOS under `/bin/bash` 3.2** with `ci/macos-tests`: it fetches bats-core 1.14.0 by commit into a temp directory (needs `git`, nothing is installed), puts `/bin` first in the `PATH`, unsets the `PRAETORIAN_*` variables of your shell, and uses the macOS tools. GitHub Actions runs `ci/check` (Linux) and `ci/macos-tests` (`macos-latest`) on pull requests and on `main`; a push to a branch without a pull request runs nothing.
 
 ## Options
 
