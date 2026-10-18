@@ -54,12 +54,15 @@ collect_scripts
 
 ENGINE=${CONTAINER_ENGINE:-}
 if [[ -z "${ENGINE}" ]]; then
+    # The first one whose daemon answers: a docker CLI alone (pulled in as
+    # a dependency, e.g. by MacPorts docker-compose-plugin) next to a
+    # running podman made every check fail with "docker.sock: no such file".
     for e in docker podman; do
-        command -v "${e}" >/dev/null 2>&1 && ENGINE=${e} && break
+        command -v "${e}" >/dev/null 2>&1 && "${e}" info >/dev/null 2>&1 && ENGINE=${e} && break
     done
 fi
 if [[ -z "${ENGINE}" ]]; then
-    echo "ci/check: neither docker nor podman found." >&2
+    echo "ci/check: no working docker or podman (installed, with its daemon / machine running)." >&2
     exit 1
 fi
 
