@@ -20,9 +20,9 @@ It runs on any Mac with macOS's own `/bin/bash` 3.2 and Homebrew and/or MacPorts
 
 ## Latest release
 
-### 1.5.0 (2026-10-18)
+### 1.5.1 (2026-10-18)
 
-Migration in batches (`--migrate` repeated, `--migrate-all`) with companion ports, a table of known MacPorts traps, homepage and precompiled-binary checks, and commands checked where the shell finds them; read-only `--status`, `--doctor` and `--sbom`; `--prune` for the dependencies `brew autoremove` misses; unattended sessions wait for the network; logs under 7 days are never rotated away. 1.4.0 added the overnight scheduling (`praetorian-schedule`) and the notifications. Full list and earlier versions: [CHANGELOG.md](CHANGELOG.md).
+`--migration-report` explains only the `[ ]` notes it shows. 1.5.0 brought migration in batches (`--migrate` repeated, `--migrate-all`) with companion ports, a table of known MacPorts traps, homepage and precompiled-binary checks, and commands checked where the shell finds them; read-only `--status`, `--doctor` and `--sbom`; `--prune` for the dependencies `brew autoremove` misses; unattended sessions wait for the network; logs under 7 days are never rotated away. 1.4.0 added the overnight scheduling (`praetorian-schedule`) and the notifications. Full list and earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
