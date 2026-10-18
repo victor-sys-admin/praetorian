@@ -8,6 +8,8 @@
 
 > **Homebrew dropped Intel Macs** (tier 3 since September 2026): no more bottles, every `brew upgrade` compiles from source, sometimes for hours. praetorian keeps Homebrew and MacPorts maintained overnight, then moves your command-line tools to MacPorts' precompiled packages, one safe step at a time: the right port (not a same-name trap), the same project, a binary for your Mac, nothing left broken, and only then the Homebrew formula goes.
 
+![praetorian --status, --doctor and --migration-report on an Intel Mac already migrated to MacPorts](docs/demo.gif)
+
 A Homebrew and MacPorts maintenance script for macOS that keeps going when things break.
 
 One command runs `brew update`, upgrades formulae and casks, removes orphans, cleans caches, updates MacPorts and its ports, runs `brew doctor`, and lists apps you haven't opened in six months. When an upgrade fails, praetorian logs it, tries a known fix, quarantines what can't be fixed, and moves on to the next package. At the end it tells you exactly what's left to do. When it has to stop something, it says why, what was *not* done, and how to unblock it.
