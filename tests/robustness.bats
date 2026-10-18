@@ -78,7 +78,7 @@ EOF
     echo cask >"${BREW_CASKROOM}/bar/.metadata/bar.json"
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"reinstall failed, its previous Caskroom entry was put back"* ]]
+    [[ "${output}" == *"reinstall failed, its previous Caskroom entry was put back"* ]] || false
     [ -d "${BREW_CASKROOM}/bar/1.0" ]
     [ ! -e "${BREW_CASKROOM}/bar/2.0" ] # the failed install's leftovers are gone
     [ "$(cat "${BREW_CASKROOM}/bar/.metadata/bar.json")" = cask ]
@@ -91,7 +91,7 @@ EOF
     # No Caskroom/bar: nothing to copy.
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"couldn't be saved: not reinstalled"* ]]
+    [[ "${output}" == *"couldn't be saved: not reinstalled"* ]] || false
     run grep -E '^(uninstall|install) ' "${BREW_CALLS}"
     [ "${status}" -eq 1 ]
 }
@@ -102,7 +102,7 @@ EOF
     export PRAETORIAN_MIN_FREE_GB="PATH[\$(touch ${BATS_TEST_TMPDIR}/pwned)]"
     run "${PRAETORIAN}" --dry-run
     [ ! -e "${BATS_TEST_TMPDIR}/pwned" ]
-    [[ "${output}" == *"PRAETORIAN_MIN_FREE_GB is not a whole number"* ]]
+    [[ "${output}" == *"PRAETORIAN_MIN_FREE_GB is not a whole number"* ]] || false
     [ "${status}" -eq 0 ]
 }
 
@@ -110,8 +110,8 @@ EOF
     export PRAETORIAN_MIN_FREE_GB=08
     run "${PRAETORIAN}" --dry-run
     [ "${status}" -eq 0 ]
-    [[ "${output}" != *"unexpected error"* ]]
-    [[ "${output}" != *"not a whole number"* ]]
+    [[ "${output}" != *"unexpected error"* ]] || false
+    [[ "${output}" != *"not a whole number"* ]] || false
 }
 
 # --- Session lock ------------------------------------------------------------
@@ -120,7 +120,7 @@ EOF
     mkdir -p "${PHOME}/.lock"
     run "${PRAETORIAN}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: couldn't take the session lock"* ]]
+    [[ "${output}" == *"BLOCKED: couldn't take the session lock"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
     [ -d "${PHOME}/.lock" ]
 }
@@ -130,7 +130,7 @@ EOF
     touch -t 202001010000 "${PHOME}/.lock"
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Lock left by a session that ended abruptly (PID unknown"* ]]
+    [[ "${output}" == *"Lock left by a session that ended abruptly (PID unknown"* ]] || false
     [ ! -e "${PHOME}/.lock" ]
     run find "${PHOME}" -maxdepth 1 -name '.lock*'
     [ -z "${output}" ]
@@ -156,11 +156,11 @@ EOF
     mkdir -p "${LOGS}"
     local i
     for i in $(seq 1 35); do
-        touch "${LOGS}/praetorian_20200101_0000$(printf '%02d' "${i}").log"
+        touch -t 202001010000 "${LOGS}/praetorian_20200101_0000$(printf '%02d' "${i}").log"
     done
     run "${PRAETORIAN}" --dry-run
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"old log file(s) would be removed"* ]]
+    [[ "${output}" == *"old log file(s) would be removed"* ]] || false
     [ -e "${LOGS}/praetorian_20200101_000001.log" ]
     [ "$(find "${LOGS}" -name 'praetorian_2020*.log' | wc -l | tr -d ' ')" -eq 35 ]
 }
@@ -192,4 +192,18 @@ EOF
     [ "${status}" -eq 2 ]
     run cut -f1 "${QUARANTINE}"
     [ "${output}" = 'foo*' ]
+}
+
+@test "logs: rotation never looks at the current directory" {
+    # GNU xargs ran "ls -t" with no input, which listed the current
+    # directory: its old files became rotation candidates.
+    local here="${BATS_TEST_TMPDIR}/cwd" i
+    mkdir -p "${here}"
+    for i in $(seq 10 49); do
+        touch -t 202001010000 "${here}/old_${i}.txt"
+    done
+    cd "${here}"
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [ "$(find "${here}" -name 'old_*.txt' | wc -l | tr -d ' ')" -eq 40 ]
 }
