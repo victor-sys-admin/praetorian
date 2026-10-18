@@ -6,8 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The version printed by `praetorian --help` and the latest version in the
 README (section "Latest release") must match, and so must the top entry
-of this file: a test checks all three. No git tag exists yet for these
-versions.
+of this file: a test checks all three. Git tags start at 1.5.0: the
+earlier versions have none.
 
 ## 1.5.0 - 2026-10-18
 
