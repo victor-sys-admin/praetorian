@@ -140,6 +140,9 @@ version carries both.
 
 ### Fixed
 
+- `--migration-report` explained every kind of `[ ]` note, even those
+  that didn't appear (a `[brew service running]` legend with no service
+  running): it now explains only the notes listed above it.
 - `--migrate` compared every `bin` directory of the keg, internal ones
   included (`libexec/bin` of pipx and scons, `lib/rustlib/…/bin` of
   rust): 4 migrations were refused for commands MacPorts has no reason
