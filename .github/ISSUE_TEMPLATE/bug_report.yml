@@ -1,0 +1,64 @@
+name: Bug report
+description: praetorian did something wrong, stopped unexpectedly, or gave a wrong fix.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. **Security issue?** Don't open an issue: report it privately (see SECURITY.md).
+
+        Session logs list your paths and installed packages: paste only the relevant lines, and remove anything you don't want public.
+  - type: input
+    id: version
+    attributes:
+      label: praetorian version
+      description: First line of `praetorian --help`.
+      placeholder: praetorian 1.5.0
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      description: Processor and macOS version (`uname -m`, `sw_vers -productVersion`).
+      placeholder: Intel (x86_64), macOS 15.8.1
+    validations:
+      required: true
+  - type: checkboxes
+    id: managers
+    attributes:
+      label: Package managers installed
+      options:
+        - label: Homebrew
+        - label: MacPorts
+  - type: input
+    id: command
+    attributes:
+      label: Command run
+      placeholder: praetorian --migrate wget
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Terminal output or block
+      description: The `✗ BLOCKED` block or the error, as printed.
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      description: From `logs/praetorian_<date>.log` in your PRAETORIAN_HOME (`~/praetorian` by default). Only the lines around the problem.
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `praetorian --doctor` (optional)
+      description: Read-only; it often explains what's wrong around Homebrew and MacPorts.
+      render: text
