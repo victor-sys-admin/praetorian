@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#0f1720"/>
+  <rect x="0" y="0" width="1280" height="8" fill="#e5a50a"/>
+  <text x="80" y="150" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="88" font-weight="700" fill="#f5f7fa">praetorian</text>
+  <text x="80" y="215" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="34" fill="#c9d1d9">Homebrew dropped Intel Macs. Keep yours maintained,</text>
+  <text x="80" y="260" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="34" fill="#c9d1d9">and move to MacPorts' precompiled packages, safely.</text>
+  <rect x="80" y="310" width="1120" height="250" rx="14" fill="#161f2b" stroke="#2b3a4d" stroke-width="2"/>
+  <circle cx="112" cy="338" r="7" fill="#ff5f57"/>
+  <circle cx="134" cy="338" r="7" fill="#febc2e"/>
+  <circle cx="156" cy="338" r="7" fill="#28c840"/>
+  <g font-family="Menlo, Monaco, monospace" font-size="26">
+    <text x="112" y="392" fill="#8b98a9">$ praetorian --migration-report</text>
+    <text x="112" y="434" fill="#3fb950">✓ <tspan fill="#c9d1d9">wget, git, nmap… same project in MacPorts, binary for this Mac</tspan></text>
+    <text x="112" y="476" fill="#e5a50a">! <tspan fill="#c9d1d9">step → step=step-cli,step-ca (MacPorts' "step" is another program)</tspan></text>
+    <text x="112" y="518" fill="#8b98a9">$ praetorian --migrate-all <tspan fill="#3fb950">✓</tspan></text>
+  </g>
+  <text x="80" y="606" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="26" fill="#8b98a9">github.com/victor-sys-admin/praetorian · bash 3.2 · GPL-3.0</text>
+</svg>
