@@ -95,8 +95,8 @@ process_gone() {
     export PRAETORIAN_MIN_FREE_GB=999999999
     run "${PRAETORIAN}" --quiet
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: not enough disk space"* ]]
-    [[ "${output}" == *"What to do"* ]]
+    [[ "${output}" == *"BLOCKED: not enough disk space"* ]] || false
+    [[ "${output}" == *"What to do"* ]] || false
 }
 
 @test "casks: --greedy by default" {
@@ -123,8 +123,8 @@ process_gone() {
     export BREW_OUTDATED_FORMULA=foo BREW_OUTDATED_CASK=bar
     run "${PRAETORIAN}" --retry-quarantined
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Quarantine ignored (--retry-quarantined)"* ]]
-    [[ "${output}" != *"in quarantine, skipped"* ]]
+    [[ "${output}" == *"Quarantine ignored (--retry-quarantined)"* ]] || false
+    [[ "${output}" != *"in quarantine, skipped"* ]] || false
     grep -qx 'upgrade --formula foo' "${BREW_CALLS}"
     grep -qx 'upgrade --cask --greedy bar' "${BREW_CALLS}"
     [ "$(wc -l <"${QUARANTINE}" | tr -d ' ')" -eq 2 ]
@@ -135,7 +135,7 @@ process_gone() {
     export BREW_OUTDATED_CASK=bar
     run "${PRAETORIAN}" --unattended
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Unattended: apps that need sudo will be deferred."* ]]
+    [[ "${output}" == *"Unattended: apps that need sudo will be deferred."* ]] || false
     grep -q -- "^-n ${PRAETORIAN_PORT_PREFIX}/bin/port -N selfupdate" "${SUDO_CALLS}"
     grep -qx 'Maintenance completed successfully.' "${OSASCRIPT_CALLS}"
 }
@@ -152,10 +152,10 @@ process_gone() {
     skip_if_real_brew
     PATH=$(path_without_brew) run "${PRAETORIAN}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: no package manager found"* ]]
-    [[ "${output}" == *"https://www.macports.org/install.php"* ]]
-    [[ "${output}" == *"https://brew.sh"* ]]
-    [[ "${output}" != *"unexpected error"* ]]
+    [[ "${output}" == *"BLOCKED: no package manager found"* ]] || false
+    [[ "${output}" == *"https://www.macports.org/install.php"* ]] || false
+    [[ "${output}" == *"https://brew.sh"* ]] || false
+    [[ "${output}" != *"unexpected error"* ]] || false
     [ ! -e "${HOME}/praetorian/.lock" ]
 }
 
@@ -163,7 +163,7 @@ process_gone() {
     mkdir -p "${PRAETORIAN_PORT_PREFIX}"
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"${PRAETORIAN_PORT_PREFIX} exists but ${PRAETORIAN_PORT_PREFIX}/bin/port is missing"* ]]
+    [[ "${output}" == *"${PRAETORIAN_PORT_PREFIX} exists but ${PRAETORIAN_PORT_PREFIX}/bin/port is missing"* ]] || false
     grep -qx 'update' "${BREW_CALLS}"
 }
 
@@ -193,9 +193,9 @@ scratch_copy() {
     scratch_copy
     run "${as_root[@]+"${as_root[@]}"}" "${SCRATCH}/praetorian"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"BLOCKED: praetorian was started as root"* ]]
-    [[ "${output}" == *"Run it again without sudo"* ]]
-    [[ "${output}" != *"unexpected error"* ]]
+    [[ "${output}" == *"BLOCKED: praetorian was started as root"* ]] || false
+    [[ "${output}" == *"Run it again without sudo"* ]] || false
+    [[ "${output}" != *"unexpected error"* ]] || false
     [ ! -s "${BREW_CALLS}" ]
 }
 
@@ -208,7 +208,7 @@ scratch_copy() {
     command -p chown 65534 "${SCRATCH}/lib/report.sh"
     run "${SCRATCH}/praetorian" --help
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"lib/report.sh belongs to another user"* ]]
+    [[ "${output}" == *"lib/report.sh belongs to another user"* ]] || false
 }
 
 # --- caffeinate --------------------------------------------------------------------
@@ -291,16 +291,16 @@ EOF
     export BREW_DOCTOR_OUTPUT=$'Warning: Some installed formulae are deprecated.\n\nWarning: Unbrewed dylibs were found in /usr/local/lib.'
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"brew doctor reports 2 warning(s)"* ]]
-    [[ "${output}" != *"Failed steps"* ]]
-    [[ "${output}" == *"Maintenance completed successfully."* ]]
+    [[ "${output}" == *"brew doctor reports 2 warning(s)"* ]] || false
+    [[ "${output}" != *"Failed steps"* ]] || false
+    [[ "${output}" == *"Maintenance completed successfully."* ]] || false
     grep -q 'Unbrewed dylibs were found' "${LOGS}"/praetorian_*[0-9].log
 }
 
 @test "brew doctor clean: healthy" {
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"System healthy — no warning."* ]]
+    [[ "${output}" == *"System healthy — no warning."* ]] || false
 }
 
 @test "cask pkg script failing → cask quarantined (pkg), hint shown, skipped next time" {
@@ -313,8 +313,8 @@ EOF
     [ "${output}" = $'bar\tcask\tpkg\tcask pkg script failed' ]
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"1 package(s) in quarantine"* ]]
-    [[ "${output}" == *"- bar"*"run brew upgrade --cask <name> by hand"* ]]
+    [[ "${output}" == *"1 package(s) in quarantine"* ]] || false
+    [[ "${output}" == *"- bar"*"run brew upgrade --cask <name> by hand"* ]] || false
     [ "$(grep -cx 'upgrade --cask --greedy bar' "${BREW_CALLS}")" -eq 1 ]
 }
 
@@ -323,19 +323,19 @@ EOF
     export BREW_UPGRADE_OUTPUT='curl: (6) Could not resolve host: ghcr.io'
     run "${PRAETORIAN}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"Network: download(s) failed (DNS/connection)"* ]]
-    [[ "${output}" == *"- Upgrading formula foo"* ]]
+    [[ "${output}" == *"Network: download(s) failed (DNS/connection)"* ]] || false
+    [[ "${output}" == *"- Upgrading formula foo"* ]] || false
     [ ! -s "${QUARANTINE}" ]
 }
 
 @test "unused apps section shown without error" {
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"── Unused apps (> 6 months)"* ]]
+    [[ "${output}" == *"── Unused apps (> 6 months)"* ]] || false
     [[ "${output}" == *"No app unused for more than 6 months."* ||
         "${output}" == *"app(s) not used for more than 6 months:"* ||
         "${output}" == *"Folder /Applications not found, step skipped."* ]]
-    [[ "${output}" != *"unexpected error"* ]]
+    [[ "${output}" != *"unexpected error"* ]] || false
 }
 
 @test "build logs written during the session → archived before brew cleanup" {
@@ -350,8 +350,8 @@ EOF
     archive=$(find "${LOGS}" -name 'praetorian_*_buildlogs.tar.gz')
     [ -n "${archive}" ]
     run tar -tzf "${archive}"
-    [[ "${output}" == *"foo/01.make.log"* ]]
-    [[ "${output}" != *"old"* ]]
+    [[ "${output}" == *"foo/01.make.log"* ]] || false
+    [[ "${output}" != *"old"* ]] || false
 }
 
 @test "no build log written during the session → no archive" {
@@ -361,4 +361,39 @@ EOF
     run "${PRAETORIAN}"
     [ "${status}" -eq 0 ]
     [ -z "$(find "${LOGS}" -name 'praetorian_*_buildlogs.tar.gz')" ]
+}
+
+@test "network: unattended, no network → blocked, explained, nothing run" {
+    export CURL_DOWN_FOR=99 CURL_CALLS="${BATS_TEST_TMPDIR}/curl_calls"
+    PRAETORIAN_NETWORK_WAIT=0 run "${PRAETORIAN}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"BLOCKED: no network (github.com unreachable after 0 s)"* ]] || false
+    [[ "${output}" == *"The next scheduled run goes ahead."* ]] || false
+    [[ "${output}" != *"unexpected error"* ]] || false
+    [ ! -s "${BREW_CALLS}" ]
+    [ ! -e "${HOME}/praetorian/.lock" ]
+}
+
+@test "network: back after a retry → session runs, wait logged" {
+    export CURL_DOWN_FOR=1 CURL_CALLS="${BATS_TEST_TMPDIR}/curl_calls"
+    PRAETORIAN_NETWORK_WAIT=1 run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    grep -qx 'update' "${BREW_CALLS}"
+    grep -q 'Network: back after 1 s' "${LOGS}"/praetorian_*.log
+}
+
+@test "network: --dry-run without network → warning only" {
+    export CURL_DOWN_FOR=99 CURL_CALLS="${BATS_TEST_TMPDIR}/curl_calls"
+    PRAETORIAN_NETWORK_WAIT=0 run "${PRAETORIAN}" --dry-run
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"No network (github.com unreachable): a real session would be blocked."* ]] || false
+}
+
+@test "network: invalid PRAETORIAN_NETWORK_WAIT → default used, never evaluated" {
+    # Single quotes on purpose: the $(…) must reach praetorian unexpanded.
+    # shellcheck disable=SC2016
+    PRAETORIAN_NETWORK_WAIT='a[$(touch "${BATS_TEST_TMPDIR}/pwned")]' run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PRAETORIAN_NETWORK_WAIT is not a whole number of seconds"* ]] || false
+    [ ! -e "${BATS_TEST_TMPDIR}/pwned" ]
 }

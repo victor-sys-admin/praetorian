@@ -13,10 +13,25 @@
 #   PORT_ACTIVE            ports already installed and active (port
 #                          installed <name>), before any "port install"
 #   PORT_AVAILABLE         known ports (port echo all, port info)
-#   PORT_CONTENTS          installed files (port contents)
+#   PORT_CONTENTS          installed files (port contents), created by
+#                          "port install" when under the prefix
+#   PORT_FILES             files per port, relative to the prefix:
+#                          "p=bin/a,bin/b q=sbin/c" (created by "port
+#                          install p", listed by "port contents p")
+#   PORT_INFO              per port "p=version_revision,homepage,license"
+#                          (port info --line …; default 1.0_0, no
+#                          homepage, MIT)
+#   PORT_DEFAULT_VARIANTS  "p=a,b": default variants (port variants p)
+#   PORT_SELECT            "group=selected=opt1,opt2 …" (port select
+#                          --summary); "port select --set g o" records o
+#   PORT_SELECT_FILES      "opt=bin/name …": created by "port select --set
+#                          <group> opt"
 #   PORT_INACTIVE          inactive versions (port installed inactive),
 #                          gone after "port uninstall inactive"
 #   PORT_LEAVES            unrequested, unused ports (port echo leaves)
+#   PORT_REQUESTED         ports marked as requested (port echo requested)
+#   PORT_INSTALLED         installed ports (port echo installed; default:
+#                          PORT_ACTIVE + PORT_REQUESTED + PORT_LEAVES)
 #
 set -u
 printf '%s\n' "$*" >>"${PORT_CALLS:?}"
@@ -57,6 +72,16 @@ case "${1:-}" in
         rc=${PORT_INSTALL_RC:-0}
         [[ -z "${PORT_INSTALL_OUTPUT:-}" ]] || echo "${PORT_INSTALL_OUTPUT}"
         [[ "${rc}" -ne 0 ]] || touch "${state}.installed.$2"
+        if [[ "${rc}" -eq 0 ]]; then
+            for f in ${PORT_CONTENTS:-}; do
+                [[ "${f}" != "${PRAETORIAN_PORT_PREFIX:-/nonexistent}"/* ]] || { mkdir -p "${f%/*}" && touch "${f}"; }
+            done
+            for entry in ${PORT_FILES:-}; do
+                [[ "${entry%%=*}" == "$2" ]] || continue
+                files=${entry#*=}
+                for f in ${files//,/ }; do mkdir -p "${PRAETORIAN_PORT_PREFIX}/${f%/*}" && touch "${PRAETORIAN_PORT_PREFIX}/${f}"; done
+            done
+        fi
         exit "${rc}"
         ;;
     installed)
@@ -77,10 +102,59 @@ case "${1:-}" in
     contents)
         echo "Port $2 contains:"
         for f in ${PORT_CONTENTS:-}; do echo "  ${f}"; done
+        for entry in ${PORT_FILES:-}; do
+            [[ "${entry%%=*}" == "$2" ]] || continue
+            files=${entry#*=}
+            for f in ${files//,/ }; do echo "  ${PRAETORIAN_PORT_PREFIX}/${f}"; done
+        done
+        ;;
+    variants)
+        defaults=""
+        for entry in ${PORT_DEFAULT_VARIANTS:-}; do [[ "${entry%%=*}" != "$2" ]] || defaults=${entry#*=}; done
+        if [[ -z "${defaults}" ]]; then
+            echo "$2 has no variants"
+        else
+            echo "$2 has the variants:"
+            for v in ${defaults//,/ }; do echo "[+]${v}: default variant ${v}"; done
+            echo "   universal: Build for multiple architectures"
+        fi
+        ;;
+    select)
+        if [[ "${2:-}" == --set ]]; then
+            echo "$4" >"${state}.select.$3"
+            for entry in ${PORT_SELECT_FILES:-}; do
+                [[ "${entry%%=*}" != "$4" ]] || { mkdir -p "${PRAETORIAN_PORT_PREFIX}/bin" && touch "${PRAETORIAN_PORT_PREFIX}/${entry#*=}"; }
+            done
+            echo "Selecting '$4' for '$3' succeeded."
+        else
+            printf '%-12s%-15s%s\n' Name Selected Options "====" "========" "======="
+            for entry in ${PORT_SELECT:-}; do
+                g=${entry%%=*}
+                rest=${entry#*=}
+                sel=${rest%%=*}
+                [[ ! -e "${state}.select.${g}" ]] || sel=$(cat "${state}.select.${g}")
+                opts=${rest#*=}
+                printf '%-12s%-15s%s none\n' "${g}" "${sel}" "${opts//,/ }"
+            done
+        fi
         ;;
     info)
         name=${!#}
-        if [[ " ${PORT_AVAILABLE:-} " == *" ${name} "* ]]; then
+        if [[ " ${PORT_AVAILABLE:-} " == *" ${name} "* && " $* " == *" --line "* ]]; then
+            meta="1.0_0,,MIT"
+            for entry in ${PORT_INFO:-}; do [[ "${entry%%=*}" != "${name}" ]] || meta=${entry#*=}; done
+            vr=${meta%%,*} rest=${meta#*,}
+            line=""
+            for arg in "$@"; do
+                case "${arg}" in
+                    --version) line+="${vr%_*}"$'\t' ;;
+                    --revision) line+="${vr##*_}"$'\t' ;;
+                    --homepage) line+="${rest%%,*}"$'\t' ;;
+                    --license) line+="${rest#*,}"$'\t' ;;
+                esac
+            done
+            echo "${line%$'\t'}"
+        elif [[ " ${PORT_AVAILABLE:-} " == *" ${name} "* ]]; then
             echo "${name}"
         else
             echo "Error: Port ${name} not found"
@@ -90,8 +164,15 @@ case "${1:-}" in
     echo)
         if [[ "${2:-}" == all ]]; then
             for p in ${PORT_AVAILABLE:-}; do echo "${p}"; done
+        elif [[ "${2:-}" == *'*'* ]]; then
+            # shellcheck disable=SC2053  # $2 is a glob on purpose
+            for p in ${PORT_AVAILABLE:-}; do [[ "${p}" != $2 ]] || echo "${p}"; done
         elif [[ "${2:-}" == leaves ]]; then
             for p in ${PORT_LEAVES:-}; do printf '%-30s @1.0_0\n' "${p}"; done
+        elif [[ "${2:-}" == requested ]]; then
+            for p in ${PORT_REQUESTED:-}; do echo "${p}"; done
+        elif [[ "${2:-}" == installed ]]; then
+            for p in ${PORT_INSTALLED-${PORT_ACTIVE:-} ${PORT_REQUESTED:-} ${PORT_LEAVES:-}}; do echo "${p}"; done
         fi
         ;;
 esac

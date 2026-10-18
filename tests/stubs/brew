@@ -15,7 +15,18 @@
 #   BREW_LIST_FILES       files of "brew list --formula <f>" (empty:
 #                         formula not installed, code 1)
 #   BREW_USES             formulae depending on <f> (brew uses --installed)
-#   BREW_LEAVES           brew leaves
+#   BREW_USES_MAP         per formula instead: "f:dep1,dep2 g:dep3"; a
+#                         dependent "brew uninstall --formula" removed is gone
+#   BREW_HOMEPAGES        "f=url g=url": brew info --json=v2 <f>… (a name
+#                         without one: "No available formula", code 1)
+#   BREW_LEAVES           brew leaves (minus what "brew uninstall --formula"
+#                         removed)
+#   BREW_LEAVES_NEXT      extra leaves once something was uninstalled
+#                         (dependencies freed by the removal, --prune)
+#   BREW_ON_REQUEST       brew list --formula --installed-on-request
+#                         (BREW_ON_REQUEST_RC: its exit code)
+#   BREW_UNINSTALL_RC     brew uninstall --formula
+#   BREW_INFO_CASK_OUTPUT / BREW_INFO_CASK_RC   brew info --cask
 #   BREW_PREFIX           brew --prefix
 #   BREW_PREFIX_RC        exit code of brew --prefix (simulates a broken brew)
 #   BREW_REPOSITORY       brew --repository
@@ -88,11 +99,55 @@ case "$1 ${2:-}" in
     "fetch "*) exit "${BREW_FETCH_RC:-0}" ;;
     "reinstall "*) exit "${BREW_REINSTALL_RC:-0}" ;;
     "list --formula")
+        if [[ "${3:-}" == --installed-on-request ]]; then
+            say "${BREW_ON_REQUEST:-}"
+            exit "${BREW_ON_REQUEST_RC:-0}"
+        fi
         [[ -n "${BREW_LIST_FILES:-}" ]] || exit 1
         say "${BREW_LIST_FILES}"
         ;;
-    "uses --installed") say "${BREW_USES:-}" ;;
-    "leaves "*) say "${BREW_LEAVES:-}" ;;
+    "uses --installed")
+        if [[ -z "${BREW_USES_MAP:-}" ]]; then
+            say "${BREW_USES:-}"
+            exit 0
+        fi
+        for entry in ${BREW_USES_MAP}; do
+            [[ "${entry%%:*}" == "${!#}" ]] || continue
+            deps=${entry#*:}
+            for dep in ${deps//,/ }; do
+                grep -qxF "${dep}" "${state}.uninstalled" 2>/dev/null || echo "${dep}"
+            done
+        done
+        ;;
+    "info --json=v2")
+        printf '{\n  "formulae": [\n'
+        for f in "${@:3}"; do
+            url=""
+            for entry in ${BREW_HOMEPAGES:-}; do [[ "${entry%%=*}" != "${f}" ]] || url=${entry#*=}; done
+            if [[ -z "${url}" ]]; then
+                echo "Error: No available formula with the name \"${f}\"." >&2
+                exit 1
+            fi
+            printf '    {\n      "name": "%s",\n      "full_name": "%s",\n      "homepage": "%s",\n      "deps": [\n        {\n          "full_name": "dep",\n          "homepage": "https://dep.example"\n        }\n      ]\n    },\n' "${f##*/}" "${f}" "${url}"
+        done
+        printf '  ],\n  "casks": []\n}\n'
+        ;;
+    "leaves "*)
+        list=${BREW_LEAVES:-}
+        [[ ! -e "${state}.uninstalled" ]] || list+=$'\n'"${BREW_LEAVES_NEXT:-}"
+        for f in ${list}; do
+            grep -qxF "${f}" "${state}.uninstalled" 2>/dev/null || echo "${f}"
+        done
+        ;;
+    "uninstall --formula")
+        rc=${BREW_UNINSTALL_RC:-0}
+        [[ "${rc}" -ne 0 ]] || printf '%s\n' "${@:3}" >>"${state}.uninstalled"
+        exit "${rc}"
+        ;;
+    "info --cask")
+        say "${BREW_INFO_CASK_OUTPUT:-}"
+        exit "${BREW_INFO_CASK_RC:-0}"
+        ;;
     "--prefix "*)
         echo "${BREW_PREFIX:-/nonexistent/brew}"
         exit "${BREW_PREFIX_RC:-0}"

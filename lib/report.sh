@@ -253,7 +253,12 @@ notify_wanted() {
         always) return 0 ;;
         never) return 1 ;;
     esac
-    [[ "${DRY_RUN}" != true && "${MODE}" != report ]] || return 1
+    # Read-only modes (the report, --status, --doctor, --sbom) answer on
+    # the screen: their exit code isn't an event to be told about later.
+    case "${MODE}" in
+        report | status | doctor | sbom) return 1 ;;
+    esac
+    [[ "${DRY_RUN}" != true ]] || return 1
     [[ "${UNATTENDED}" != true ]] || return 0
     # PRAETORIAN_NOTIFY_AFTER comes from the environment: digits only,
     # read as decimal, before it goes near (( )) (see check_disk_space).
