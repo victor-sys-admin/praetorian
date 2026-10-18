@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Fake curl for the tests: never goes on the real network.
+#
+# Network check (any other URL): answers like a reachable host, unless
+# $CURL_DOWN_FOR is set: then the first $CURL_DOWN_FOR calls fail as with
+# no DNS (code 6), counted in $CURL_CALLS (needed with CURL_DOWN_FOR).
+#
+# Binary archives (https://packages.macports.org/…, the last argument):
+# every one exists, unless $CURL_PACKAGES is set: then only the archive
+# names it lists (space-separated) exist, the others are a 404 (code 22);
+# CURL_PACKAGES=offline fails them all as a timeout (code 28). The URLs
+# asked for go to $CURL_URLS, when set.
+#
+set -u
+url=${!#}
+if [[ "${url}" == https://packages.macports.org/* ]]; then
+    [[ -z "${CURL_URLS:-}" ]] || printf '%s\n' "${url}" >>"${CURL_URLS}"
+    [[ -n "${CURL_PACKAGES+set}" ]] || exit 0
+    if [[ "${CURL_PACKAGES}" == offline ]]; then
+        echo "curl: (28) Connection timed out after 10001 milliseconds" >&2
+        exit 28
+    fi
+    [[ " ${CURL_PACKAGES} " != *" ${url##*/} "* ]] || exit 0
+    echo "curl: (22) The requested URL returned error: 404" >&2
+    exit 22
+fi
+if [[ -n "${CURL_DOWN_FOR:-}" ]]; then
+    echo x >>"${CURL_CALLS}"
+    if (($(wc -l <"${CURL_CALLS}") <= CURL_DOWN_FOR)); then
+        echo "curl: (6) Could not resolve host: github.com" >&2
+        exit 6
+    fi
+fi
+exit 0
