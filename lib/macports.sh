@@ -399,20 +399,59 @@ coexistence() {
         ok "No command installed twice."
         return 0
     fi
-    warn "${n} command(s) installed by both Homebrew and MacPorts:"
-    local i=0
-    while IFS= read -r b; do
-        [[ -n "${b}" ]] || continue
-        if ((i++ >= 15)); then
-            say "    ${C_DIM}… $((n - 15)) more, see the log${C_RESET}"
-            break
-        fi
-        # Not a link (a file put there by hand): readlink fails, no formula.
-        formula=$(readlink "${brew_bin}/${b}" 2>/dev/null | sed -nE 's#.*/Cellar/([^/]+)/.*#\1#p' || true)
-        active=$(command -v "${b}" 2>/dev/null || echo "?")
-        say "    ${C_DIM}-${C_RESET} ${b} ${C_DIM}(formula ${formula:-?}) → used: ${active}${C_RESET}"
-    done <<<"${dups}"
     log_detail "Commands installed twice: $(tr '\n' ' ' <<<"${dups}")"
-    say "    ${C_DIM}As long as they're duplicated, Homebrew keeps rebuilding these formulae.${C_RESET}"
-    info "To finish migrating a formula: praetorian --migrate <formula>[=<port>]"
+
+    # "<formula>\t<command>" per duplicate. Not a link (a file put there
+    # by hand): readlink fails, formula "?".
+    local pairs leaves actionable dep_pairs deps foreign
+    pairs=$(while IFS= read -r b; do
+        [[ -n "${b}" ]] || continue
+        formula=$(readlink "${brew_bin}/${b}" 2>/dev/null | sed -nE 's#.*/Cellar/([^/]+)/.*#\1#p' || true)
+        printf '%s\t%s\n' "${formula:-?}" "${b}"
+    done <<<"${dups}")
+    # Only a formula nothing else needs (brew leaves) can be migrated or
+    # removed. The others are dependencies of formulae kept in Homebrew:
+    # MacPorts ships the same libraries for its own ports, nothing to do
+    # (2026-10-17: "210 commands installed twice", all of them from
+    # ffmpeg / GTK dependencies, with a --migrate hint that couldn't apply).
+    leaves=$(brew leaves 2>>"${LOG_FILE}" | sed 's#.*/##' | tr '\n' ' ' || true)
+    actionable=$(awk -F '\t' -v leaves="${leaves}" '
+        BEGIN { n = split(leaves, a, " "); for (i = 1; i <= n; i++) leaf[a[i]] = 1 }
+        $1 != "?" && ($1 in leaf)' <<<"${pairs}")
+    # Not a link into the Cellar: put there by another installer, not a
+    # formula. --migrate can't apply; only worth knowing which copy runs.
+    foreign=$(awk -F '\t' '$1 == "?" { print $2 }' <<<"${pairs}")
+    dep_pairs=$(awk -F '\t' -v leaves="${leaves}" '
+        BEGIN { n = split(leaves, a, " "); for (i = 1; i <= n; i++) leaf[a[i]] = 1 }
+        $1 != "?" && !($1 in leaf)' <<<"${pairs}")
+    deps=$(cut -f1 <<<"${dep_pairs}" | sed '/^$/d' | sort -u)
+
+    if [[ -z "${actionable}" ]]; then
+        ok "No formula you could migrate has its commands installed twice."
+    else
+        local formulas nf i=0 cmds
+        formulas=$(cut -f1 <<<"${actionable}" | sort -u)
+        nf=$(count_lines "${formulas}")
+        warn "${nf} Homebrew formula(e) that nothing else needs also come with MacPorts:"
+        while IFS= read -r formula; do
+            if ((i++ >= 15)); then
+                say "    ${C_DIM}… $((nf - 15)) more, see the log${C_RESET}"
+                break
+            fi
+            cmds=$(awk -F '\t' -v f="${formula}" '$1 == f { print $2 }' <<<"${actionable}")
+            b=$(head -n 1 <<<"${cmds}")
+            active=$(command -v "${b}" 2>/dev/null || echo "?")
+            say "    ${C_DIM}-${C_RESET} ${formula} ${C_DIM}($(tr '\n' ' ' <<<"${cmds}" | cut -c1-60)) → used: ${active}${C_RESET}"
+        done <<<"${formulas}"
+        info "Finish the migration: praetorian --migrate <formula>[=<port>] (or brew uninstall <formula> if the MacPorts copy is enough)."
+    fi
+    if [[ -n "${foreign}" ]]; then
+        local first
+        first=$(head -n 1 <<<"${foreign}")
+        info "$(count_lines "${foreign}") command(s) in ${brew_bin} not installed by Homebrew also exist in MacPorts: $(tr '\n' ' ' <<<"${foreign}" | cut -c1-80)${C_DIM}(${first} → used: $(command -v "${first}" 2>/dev/null || echo "?"))${C_RESET}"
+    fi
+    if [[ -n "${deps}" ]]; then
+        info "${C_DIM}$(count_lines "${dep_pairs}") command(s) from $(count_lines "${deps}") Homebrew dependencies also exist in MacPorts: the MacPorts copy is used, nothing to do (needed by the formulae you keep in Homebrew).${C_RESET}"
+        log_detail "Duplicated dependencies: $(tr '\n' ' ' <<<"${deps}")"
+    fi
 }
