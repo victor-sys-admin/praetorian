@@ -1,15 +1,21 @@
 name: quality
 
 # Same checks as locally: everything goes through ci/check (pinned containers).
+# Runs on pull requests (every push to a PR branch, through the PR) and on
+# main once merged. A push to a branch without a PR runs nothing: run
+# ci/check and ci/macos-tests locally there.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions: {}
 
+# A newer push to the same PR cancels the run still going. On main, every
+# merge is checked to the end: a later merge never cancels it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
