@@ -684,6 +684,37 @@ report_answering() {
     done
 }
 
+@test "--migration-report on a terminal: 11 differing homepages → the first 10 listed and asked, no request for the 11th" {
+    local i f leaves="" brew="" port=""
+    for ((i = 1; i <= 11; i++)); do
+        printf -v f 'f%02d' "${i}"
+        leaves+="${f}"$'\n' brew+="${f}=https://${f}.example.com/ " port+="${f}=1.0_0,https://${f}.dev/,MIT "
+    done
+    export BREW_LEAVES=${leaves%$'\n'} PORT_AVAILABLE=${leaves//$'\n'/ } BREW_HOMEPAGES=${brew% } PORT_INFO=${port% }
+    export CURL_HOMEPAGE_URLS="${BATS_TEST_TMPDIR}/homepage_urls"
+    : >"${CURL_HOMEPAGE_URLS}"
+    run report_answering y
+    [[ "${output}" == *"11 formula(e) have a MacPorts port with the same name but another homepage (the first 10):"* ]] || false
+    [[ "${output}" == *"      f10   Homebrew: "* ]] || false
+    [[ "${output}" != *"      f11   Homebrew: "* ]] || false
+    grep -q '^https://f10\.' "${CURL_HOMEPAGE_URLS}"
+    run grep -c '^https://f11\.' "${CURL_HOMEPAGE_URLS}"
+    [ "${output}" = 0 ]
+}
+
+@test "--migration-report --allow-project-site-requests: MacPorts' homepage forwarding to Homebrew's → same name; a forward ending on an error page → still different" {
+    export BREW_LEAVES=$'baz\nqux' PORT_AVAILABLE="baz qux"
+    export BREW_HOMEPAGES="baz=https://baz.example.com/ qux=https://qux.example.com/"
+    export PORT_INFO="baz=1.0_0,https://baz.dev/,MIT qux=1.0_0,https://qux.dev/,MIT"
+    export CURL_REDIRECTS="https://baz.dev/=https://baz.example.com/ https://qux.example.com/=https://qux.dev/"
+    export CURL_HOMEPAGE_CODES="https://qux.dev/=404"
+    run "${PRAETORIAN}" --allow-project-site-requests --migration-report
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"- baz (homepage moved: https://baz.example.com/ and https://baz.dev/ lead to the same page)"* ]] || false
+    [[ "${output}" == *"Same name, but maybe a different project (1)"* ]] || false
+    [[ "${output}" == *"qux (Homebrew: https://qux.example.com/ — MacPorts: https://qux.dev/)"* ]] || false
+}
+
 @test "--migrate: a homepage that forwards to the other → not blocked with --allow-project-site-requests; blocked without, the option suggested; a dry run asks nothing" {
     export BREW_LIST_FILES="/usr/local/Cellar/foo/1.0/bin/foo"
     export PORT_AVAILABLE="foo" PORT_CONTENTS="${PRAETORIAN_PORT_PREFIX}/bin/foo" PORT_FILES="foo=bin/foo"

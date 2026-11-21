@@ -17,8 +17,9 @@
 # $CURL_HTTP_ERROR (e.g. 503): every archive answers that code instead.
 #
 # Homepages (-w '%{http_code} %{url_effective}', any other URL): 200 at
-# the URL itself, or where $CURL_REDIRECTS ("from=to …") sends it. The
-# URLs asked for go to $CURL_HOMEPAGE_URLS, when set.
+# the URL itself, or where $CURL_REDIRECTS ("from=to …") sends it; the
+# code that page answers can be set in $CURL_HOMEPAGE_CODES ("url=code
+# …"). The URLs asked for go to $CURL_HOMEPAGE_URLS, when set.
 #
 set -u
 url=${!#}
@@ -50,7 +51,9 @@ if [[ " $* " == *" %{http_code} %{url_effective} "* ]]; then
     [[ -z "${CURL_HOMEPAGE_URLS:-}" ]] || printf '%s\n' "${url}" >>"${CURL_HOMEPAGE_URLS}"
     final=${url}
     for entry in ${CURL_REDIRECTS:-}; do [[ "${entry%%=*}" != "${url}" ]] || final=${entry#*=}; done
-    printf '200 %s' "${final}"
+    code=200
+    for entry in ${CURL_HOMEPAGE_CODES:-}; do [[ "${entry%%=*}" != "${final}" ]] || code=${entry#*=}; done
+    printf '%s %s' "${code}" "${final}"
     exit 0
 fi
 if [[ -n "${CURL_DOWN_FOR:-}" ]]; then
