@@ -210,6 +210,49 @@ lift_built_later() {
     done
 }
 
+# skip_pinned "<outdated>": takes out of the caller's todo (maintenance_
+# brew) the formulae pinned with brew pin, and those depending on an
+# outdated pinned one. brew upgrade refuses both, with code 1 and no
+# build log ("Not upgrading 1 pinned package", "You must brew unpin …"),
+# so nothing is quarantined and every session failed the same way; their
+# new versions were downloaded too. brew list --pinned prints short names
+# and brew outdated a tap formula's full one (user/tap/foo): compared on
+# the short name (a core and a tap formula of one name can't both be
+# installed, they share Cellar/<name>). A pinned dependency that is only
+# a build dependency isn't seen (brew uses without --include-build).
+skip_pinned() {
+    local pinned held held_short map="" p d f short left=""
+    pinned=$(brew list --formula --pinned 2>>"${LOG_FILE}" || true)
+    [[ -n "${pinned}" && -n "${todo}" ]] || return 0
+    # Outdated and pinned, under brew outdated's name.
+    held=$(awk 'NR == FNR {p[$0] = 1; next} {s = $0; sub(/.*\//, "", s)} s in p' \
+        <(printf '%s\n' "${pinned}") <(printf '%s\n' "$1"))
+    [[ -n "${held}" ]] || return 0
+    held_short=$(awk '{sub(/.*\//, ""); print}' <<<"${held}")
+    # "<dependent> <pinned>", short names.
+    while IFS= read -r p; do
+        while IFS= read -r d; do
+            if [[ -n "${d}" ]]; then map+="${d##*/} ${p}"$'\n'; fi
+        done < <(brew uses --installed --recursive --formula "${p}" 2>>"${LOG_FILE}" || true)
+    done <<<"${held_short}"
+
+    while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        short=${f##*/}
+        if grep -qxF "${short}" <<<"${held_short}"; then
+            info "Formula ${f} skipped ${C_DIM}(pinned: brew unpin ${short} to upgrade it)${C_RESET}"
+            continue
+        fi
+        p=$(awk -v d="${short}" '$1 == d {print $2; exit}' <<<"${map}")
+        if [[ -n "${p}" ]]; then
+            info "Formula ${f} skipped ${C_DIM}(needs the newer ${p}, which is pinned: brew unpin ${p} to upgrade both)${C_RESET}"
+            continue
+        fi
+        left+="${left:+$'\n'}${f}"
+    done <<<"${todo}"
+    todo=${left}
+}
+
 # upgrade_cask name [flags…]
 upgrade_cask() {
     local c=$1 before=${STEP_FAIL}
@@ -387,13 +430,14 @@ maintenance_brew() {
 
     show_quarantine
 
-    # --- Formulae: quarantined ones are excluded. -------------------------
+    # --- Formulae: quarantined and pinned ones are excluded. --------------
     local outdated skipped todo disk_low=false
     outdated=$(brew outdated --formula --quiet 2>>"${LOG_FILE}" || true)
     skipped=$(quarantined_names formula)
     todo=$(filter_out "${outdated}" "${skipped}")
+    skip_pinned "${outdated}"
     if [[ -z "${todo}" ]]; then
-        ok "Formulae up to date ${C_DIM}(quarantine excluded)${C_RESET}"
+        ok "Formulae up to date ${C_DIM}(quarantine and pins excluded)${C_RESET}"
     else
         local -a formulas=()
         local f
