@@ -155,6 +155,9 @@ STEP_PID=""            # PID of the running command (run_step)
 CURRENT_STEP=""        # label of the running step (error messages)
 LAST_BUILD_FAILS=""    # formulae whose build failed in the last step
 SESSION_QUARANTINED="" # names quarantined during this session
+# Outdated formulae of this session, as brew outdated names them (a tap
+# formula: user/tap/foo), one per line (see formula_session_name).
+SESSION_FORMULAE=""
 LOCK_HELD=false
 PORT_LAST_OUT=""  # output of the last read-only port command (port_ro)
 OUTDATED_PORTS="" # outdated ports, one per line (port_refresh_outdated)
