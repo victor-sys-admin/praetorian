@@ -884,6 +884,64 @@ in_praetorian() {
     [ "${output}" = $'bar\tformula\tbuild\nfoo\tformula\tbuild' ]
 }
 
+# A tap formula: brew outdated says user/tap/foo, its build log foo.
+@test "tap formula fails its own build: one entry, under its full name, as its own failure" {
+    export BREW_OUTDATED_FORMULA=user/tap/foo BREW_UPGRADE_RC=1
+    export BREW_UPGRADE_OUTPUT=$'Last 15 lines from /x/Library/Logs/Homebrew/foo/01.make:\nmake: error'
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 2 ]
+    run cut -f1,2,4,5 "${QUARANTINE}"
+    [ "${output}" = $'user/tap/foo\tformula\tbuild\tbuild failed' ]
+}
+
+@test "tap dependency fails before its own turn: not built a second time in the session" {
+    # bar's upgrade builds user/tap/foo first, which fails.
+    export BREW_OUTDATED_FORMULA=$'bar\nuser/tap/foo' BREW_UPGRADE_RC=1
+    export BREW_UPGRADE_OUTPUT=$'Last 15 lines from /x/Library/Logs/Homebrew/foo/01.make:\nmake: error'
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"Formula user/tap/foo skipped (failed earlier in the session)"* ]] || false
+    run grep -c 'upgrade --formula user/tap/foo' "${BREW_CALLS}"
+    [ "${output}" -eq 0 ]
+    run cut -f1,5 "${QUARANTINE}"
+    [ "${output}" = $'user/tap/foo\tbuild failed\nbar\tdependency user/tap/foo fails to build' ]
+}
+
+@test "entry under the short name (earlier session): the tap formula is skipped" {
+    mkdir -p "${HOME}/praetorian"
+    printf 'foo\tformula\t%s\tbuild\tbuild failed\n' "$(date +%s)" >"${QUARANTINE}"
+    export BREW_OUTDATED_FORMULA=$'user/tap/foo\nbar'
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    grep -qx 'fetch --formula --deps bar' "${BREW_CALLS}"
+    run grep -c 'upgrade --formula user/tap/foo' "${BREW_CALLS}"
+    [ "${output}" -eq 0 ]
+}
+
+@test "tap formula built later as a dependency: lifted, and its failed step goes too" {
+    export BREW_OUTDATED_FORMULA=$'user/tap/bar\nfoo' BREW_OUTDATED_FORMULA_AFTER=$'user/tap/bar\nfoo'
+    export BREW_OUTDATED_FORMULA_LATER="" BREW_UPGRADE_FAILS=user/tap/bar BREW_UPGRADE_RC=1
+    export BREW_UPGRADE_OUTPUT=$'Last 15 lines from /x/Library/Logs/Homebrew/bar/01.make:\nmake: error'
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"user/tap/bar failed to build, then got built after all"* ]] || false
+    [[ "${output}" != *"Failed steps"* ]] || false
+    [ ! -s "${QUARANTINE}" ]
+}
+
+@test "entry under the short name, built later: the full-name step's failure goes" {
+    # An entry from an earlier session, kept by --retry-quarantined.
+    mkdir -p "${HOME}/praetorian"
+    printf 'bar\tformula\t%s\tbuild\tbuild failed\n' "$(date +%s)" >"${QUARANTINE}"
+    export BREW_OUTDATED_FORMULA=$'user/tap/bar\nfoo' BREW_OUTDATED_FORMULA_AFTER=$'user/tap/bar\nfoo'
+    export BREW_OUTDATED_FORMULA_LATER="" BREW_UPGRADE_FAILS=user/tap/bar BREW_UPGRADE_RC=1
+    export BREW_UPGRADE_OUTPUT='Error: user/tap/bar: something broke'
+    run "${PRAETORIAN}" --retry-quarantined
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"bar failed to build, then got built after all"* ]] || false
+    [[ "${output}" != *"Failed steps"* ]] || false
+}
+
 # bar fails to build on its own, then foo's upgrade builds it as a dependency.
 built_later_env() {
     export BREW_OUTDATED_FORMULA=$'bar\nfoo' BREW_OUTDATED_FORMULA_AFTER=$'bar\nfoo'
