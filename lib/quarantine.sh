@@ -70,12 +70,19 @@ quarantined_names() {
     awk -F'\t' -v t="$1" '$2 == t {print $1}' "${QUARANTINE_FILE}"
 }
 
-# filter_out "<list>" "<to exclude>" → list without the excluded names
+# filter_out "<list>" "<to exclude>" → list without the excluded names.
+# Compared on the short name too: brew outdated lists a tap formula as
+# user/tap/foo, while a quarantine entry read from its build log, or from
+# an earlier version, says foo (a core and a tap formula of one name can't
+# both be installed: they share Cellar/<name>).
 filter_out() {
     if [[ -z "$2" ]]; then
         printf '%s\n' "$1" | sed '/^$/d'
     else
-        printf '%s\n' "$1" | sed '/^$/d' | grep -vxF -f <(printf '%s\n' "$2") || true
+        awk 'NR == FNR {x[$0] = 1; s = $0; sub(/.*\//, "", s); x[s] = 1; next}
+            $0 == "" {next}
+            {s = $0; sub(/.*\//, "", s)}
+            !($0 in x) && !(s in x)' <(printf '%s\n' "$2") <(printf '%s\n' "$1")
     fi
 }
 
