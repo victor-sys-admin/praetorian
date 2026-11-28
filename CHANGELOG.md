@@ -149,6 +149,14 @@ have none.
   another status or no answer keeps the message as it was; with several
   ports, the advice to wait goes only if all of them answer 404. The
   report doesn't make these requests.
+- A tap formula (`user/tap/foo` in `brew outdated`, `foo` in its build
+  log) was quarantined twice when its own build failed, once as a
+  dependency of itself; failing as another formula's dependency, it was
+  built and failed again later in the same session; an entry `foo` didn't
+  keep `user/tap/foo` out of the next session; and built later as a
+  dependency, its failed step stayed. Failed builds are now quarantined
+  under the session's name, and the quarantine, the same-session skip
+  and the failed steps compare the short name too.
 
 ### Security
 
