@@ -100,6 +100,7 @@ relink_if_needed() {
 upgrade_formula() {
     local f=$1
     local label="Upgrading formula ${f}" before upgrade_failed=false build_fails name
+    local own=false deps=""
     local -a fails=()
     before=${STEP_FAIL}
     run_step "${label}" brew upgrade --formula "${f}"
@@ -138,16 +139,36 @@ upgrade_formula() {
     fi
 
     # Build still failing: quarantine the failing formula, and the
-    # requested one too when it's one of its dependencies that broke.
+    # requested one too when it's one of its dependencies that broke. The
+    # build logs give short names (foo), brew outdated a tap formula's
+    # full one (user/tap/foo): quarantined under the session's name, so
+    # that the entry matches the list (and f's own failure is f's).
     if [[ -n "${build_fails}" ]]; then
         # read -a: split on spaces without glob expansion of the names.
         read -r -a fails <<<"${build_fails}"
         for name in "${fails[@]}"; do
+            if [[ "${name}" == "${f##*/}" ]]; then
+                name=${f}
+            else
+                name=$(formula_session_name "${name}")
+            fi
+            if [[ "${name}" == "${f}" ]]; then own=true; fi
+            deps+="${deps:+ }${name}"
             quarantine_add "${name}" formula build "build failed"
         done
-        [[ " ${build_fails} " == *" ${f} "* ]] ||
-            quarantine_add "${f}" formula build "dependency ${build_fails} fails to build"
+        [[ "${own}" == true ]] ||
+            quarantine_add "${f}" formula build "dependency ${deps} fails to build"
     fi
+}
+
+# formula_session_name <name>: the name brew outdated gave this session
+# to the formula <name>, or to the one whose short name it is
+# (user/tap/foo for foo); else <name> itself. A core and a tap formula of
+# one name can't both be installed (they share Cellar/<name>).
+formula_session_name() {
+    awk -v n="$1" '{s = $0; sub(/.*\//, "", s)}
+        $0 == n || s == n {print; found = 1; exit}
+        END {if (!found) print n}' <<<"${SESSION_FORMULAE}"
 }
 
 # formula_current name: installed and not outdated. Given a name, brew
@@ -168,7 +189,7 @@ formula_current() {
 # from earlier sessions are lifted the same way (a formula built by hand).
 lift_built_later() {
     [[ "${DRY_RUN}" != true && -s "${QUARANTINE_FILE}" ]] || return 0
-    local entries name detail deps d all tmp q
+    local entries name detail deps d all tmp q label
     local -a lifted=() kept=() dep_list=()
     entries=$(awk -F'\t' '$2 == "formula" && $4 == "build" {print $1 "\t" $5}' "${QUARANTINE_FILE}")
     [[ -n "${entries}" ]] || return 0
@@ -186,8 +207,11 @@ lift_built_later() {
             [[ "${all}" == true ]] || continue
             warn "${name}: ${deps} got built after all, quarantine lifted (${name} is upgraded at the next session)."
         elif formula_current "${name}"; then
-            forget_failure "Upgrading formula ${name}"
-            forget_failure "Upgrading formula ${name} (2nd try after fix)"
+            # The step was named after brew outdated's name (an entry
+            # from an earlier session can have the short one).
+            label=$(formula_session_name "${name}")
+            forget_failure "Upgrading formula ${label}"
+            forget_failure "Upgrading formula ${label} (2nd try after fix)"
             warn "${name} failed to build, then got built after all (as a dependency of another formula, or by hand): quarantine lifted."
         else
             continue
@@ -390,6 +414,7 @@ maintenance_brew() {
     # --- Formulae: quarantined ones are excluded. -------------------------
     local outdated skipped todo disk_low=false
     outdated=$(brew outdated --formula --quiet 2>>"${LOG_FILE}" || true)
+    SESSION_FORMULAE=${outdated}
     skipped=$(quarantined_names formula)
     todo=$(filter_out "${outdated}" "${skipped}")
     if [[ -z "${todo}" ]]; then
@@ -414,7 +439,8 @@ maintenance_brew() {
             fi
             # Already quarantined during this session (dependency of an
             # earlier formula that failed to build): skip.
-            if [[ " ${SESSION_QUARANTINED} " == *" ${f} "* ]]; then
+            if [[ " ${SESSION_QUARANTINED} " == *" ${f} "* ||
+                " ${SESSION_QUARANTINED} " == *" ${f##*/} "* ]]; then
                 info "Formula ${f} skipped ${C_DIM}(failed earlier in the session)${C_RESET}"
                 continue
             fi
