@@ -59,6 +59,12 @@ have none.
 
 ### Fixed
 
+- A formula pinned with `brew pin` was downloaded, then refused by
+  `brew upgrade` ("Not upgrading 1 pinned package", code 1, no build
+  log), so every session ended with errors and nothing was quarantined;
+  a formula depending on an outdated pinned one failed the same way.
+  Both are now left out before the download, with an info line naming
+  the pin (`brew unpin <name>` to upgrade them).
 - An unattended session could wait all night on a macOS keychain
   dialog: after a failed build, brew's search for known issues looks
   for a GitHub token in the keychain too. Unattended sessions now set

@@ -32,6 +32,7 @@
 #                         removed)
 #   BREW_LEAVES_NEXT      extra leaves once something was uninstalled
 #                         (dependencies freed by the removal, --prune)
+#   BREW_PINNED           brew list --formula --pinned (short names)
 #   BREW_ON_REQUEST       brew list --formula --installed-on-request
 #                         (BREW_ON_REQUEST_RC: its exit code)
 #   BREW_UNINSTALL_RC     brew uninstall --formula
@@ -131,6 +132,10 @@ case "$1 ${2:-}" in
         if [[ "${3:-}" == --versions ]]; then
             [[ " ${BREW_NOT_INSTALLED:-} " != *" ${4:-} "* ]] || exit 1
             echo "${4:-} 1.0"
+            exit 0
+        fi
+        if [[ "${3:-}" == --pinned ]]; then
+            say "${BREW_PINNED:-}"
             exit 0
         fi
         if [[ "${3:-}" == --installed-on-request ]]; then
