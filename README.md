@@ -661,6 +661,8 @@ A package that fails for a cause that won't go away on its own is written to `qu
 
 When a *dependency* fails to build, the requested formula is quarantined too, because it would fail the same way. Anything quarantined earlier in the same session is skipped.
 
+A formula from a tap has two names: `brew outdated` lists it as `user/tap/foo`, its build log is in `~/Library/Logs/Homebrew/foo/`. A failed build is quarantined under the session's name (`user/tap/foo`), and entries are compared on the short name too, so an entry `foo` (from an earlier version) still keeps `user/tap/foo` out. The other side of it: an entry for a core `foo` would also keep out a tap `foo` installed later, until it expires (both can't be installed at once, they share `Cellar/foo`).
+
 A build failure can go away within the session: brew upgrade builds the outdated dependencies of a formula first, so a formula that failed on its own can get built as the dependency of a formula upgraded later. Once the formula upgrades are done, a formula quarantined for a failed build, in this session or an earlier one, that is installed and current is lifted (`brew outdated` has to answer), and so is a formula held back only by such dependencies; that formula is then upgraded at the next session.
 
 *Why:* without a quarantine, a formula that needs Xcode gets rebuilt and fails on every run, sometimes after an hour of compiling. Build failures expire sooner (7 days) because a new formula revision often fixes them. `.toolchain` records whether the last run used Xcode or only the Command Line Tools: when that changes (for example after you install Xcode), build quarantines no longer apply, because they were recorded with a different compiler.
