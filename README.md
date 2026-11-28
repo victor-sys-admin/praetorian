@@ -535,7 +535,7 @@ Maintenance Homebrew (skipped if Homebrew is absent)
    1. Homebrew developer-mode guard (switch back to stable if needed)
    2. brew update
    3. show quarantine
-   4. formulae: list outdated (minus quarantine)
+   4. formulae: list outdated (minus quarantine and pinned formulae)
         → brew fetch --deps   (download everything first)
         → upgrade one by one   (auto-fix + one retry on known failures;
                                 free space checked before each one: below
@@ -662,6 +662,8 @@ A package that fails for a cause that won't go away on its own is written to `qu
 When a *dependency* fails to build, the requested formula is quarantined too, because it would fail the same way. Anything quarantined earlier in the same session is skipped.
 
 A build failure can go away within the session: brew upgrade builds the outdated dependencies of a formula first, so a formula that failed on its own can get built as the dependency of a formula upgraded later. Once the formula upgrades are done, a formula quarantined for a failed build, in this session or an earlier one, that is installed and current is lifted (`brew outdated` has to answer), and so is a formula held back only by such dependencies; that formula is then upgraded at the next session.
+
+A formula pinned with `brew pin` isn't a quarantine entry, but it is left out the same way: `brew upgrade` refuses it ("Not upgrading 1 pinned package", no build log), so it would fail every session. So is a formula that depends on an outdated pinned one, which brew refuses too ("You must `brew unpin` …"). Neither is downloaded, and an info line names the pin; `brew unpin <name>` lets the next session upgrade them. Pinned formulae are read from `brew list --formula --pinned` (short names, compared with the short name of a tap formula), their dependents from `brew uses --installed --recursive` (a pinned build-only dependency isn't seen).
 
 *Why:* without a quarantine, a formula that needs Xcode gets rebuilt and fails on every run, sometimes after an hour of compiling. Build failures expire sooner (7 days) because a new formula revision often fixes them. `.toolchain` records whether the last run used Xcode or only the Command Line Tools: when that changes (for example after you install Xcode), build quarantines no longer apply, because they were recorded with a different compiler.
 

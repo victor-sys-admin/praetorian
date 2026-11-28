@@ -933,6 +933,47 @@ built_later_env() {
     [[ "${output}" != *"Failed steps"* ]] || false
 }
 
+@test "pinned formula: neither downloaded nor upgraded, no error" {
+    export BREW_OUTDATED_FORMULA=$'foo\nbar' BREW_PINNED=foo
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Formula foo skipped (pinned: brew unpin foo to upgrade it)"* ]] || false
+    grep -qx 'fetch --formula --deps bar' "${BREW_CALLS}"
+    grep -qx 'upgrade --formula bar' "${BREW_CALLS}"
+    run grep -c 'upgrade --formula foo' "${BREW_CALLS}"
+    [ "${output}" -eq 0 ]
+}
+
+@test "pinned tap formula: brew outdated's full name matched on the short one" {
+    export BREW_OUTDATED_FORMULA=user/tap/foo BREW_PINNED=foo
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Formula user/tap/foo skipped (pinned"* ]] || false
+    [[ "${output}" == *"Formulae up to date (quarantine and pins excluded)"* ]] || false
+    run grep -cE '^(fetch|upgrade) --formula' "${BREW_CALLS}"
+    [ "${output}" -eq 0 ]
+}
+
+@test "formula depending on an outdated pinned one: skipped too, the others upgraded" {
+    export BREW_OUTDATED_FORMULA=$'foo\nbar\nbaz' BREW_PINNED=foo BREW_USES_MAP="foo:bar"
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Formula bar skipped (needs the newer foo, which is pinned: brew unpin foo to upgrade both)"* ]] || false
+    grep -qx 'uses --installed --recursive --formula foo' "${BREW_CALLS}"
+    grep -qx 'fetch --formula --deps baz' "${BREW_CALLS}"
+    run grep -cE '^upgrade --formula (foo|bar)$' "${BREW_CALLS}"
+    [ "${output}" -eq 0 ]
+}
+
+@test "pinned but up to date: its dependents upgraded, brew uses not asked" {
+    export BREW_OUTDATED_FORMULA=bar BREW_PINNED=foo BREW_USES_MAP="foo:bar"
+    run "${PRAETORIAN}"
+    [ "${status}" -eq 0 ]
+    grep -qx 'upgrade --formula bar' "${BREW_CALLS}"
+    run grep -c '^uses ' "${BREW_CALLS}"
+    [ "${output}" -eq 0 ]
+}
+
 # --- Homebrew: casks -----------------------------------------------------------
 
 @test "half-installed cask → forced uninstall then reinstall" {
